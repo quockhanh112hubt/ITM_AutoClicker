@@ -95,6 +95,29 @@ class ImageMatcher:
         right = max(x1, x2)
         bottom = max(y1, y2)
         
+        print(f"[DEBUG ImageMatcher] Received: ({x1}, {y1}, {x2}, {y2})")
+        print(f"[DEBUG ImageMatcher] Normalized: ({left}, {top}, {right}, {bottom})")
+        
+        # Clamp to valid screen coordinates (in case of negative coords from DPI scaling)
+        left = max(0, left)
+        top = max(0, top)
+        right = max(0, right)
+        bottom = max(0, bottom)
+        
+        print(f"[DEBUG ImageMatcher] Clamped: ({left}, {top}, {right}, {bottom})")
+        
+        width = right - left
+        height = bottom - top
+        print(f"[DEBUG ImageMatcher] Size: {width}x{height}")
+        
+        # Check if size is valid
+        if width <= 0 or height <= 0:
+            print(f"[ERROR] Invalid region size: {width}x{height}")
+            return
+        
         # Capture region
         screenshot = ImageGrab.grab(bbox=(left, top, right, bottom))
+        print(f"[DEBUG ImageMatcher] Captured image size: {screenshot.size}")
+        
         screenshot.save(save_path)
+        print(f"[DEBUG ImageMatcher] Saved to: {save_path}")

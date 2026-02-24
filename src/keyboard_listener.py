@@ -5,12 +5,17 @@ Monitors Page Up, ESC, and END keys without blocking mouse
 from pynput import keyboard
 from typing import Callable, Optional
 import threading
+from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot, Qt
 
 
-class KeyboardListener:
+class KeyboardListener(QObject):
     """Global keyboard listener for hotkeys"""
+    _page_up_signal = pyqtSignal()
+    _esc_signal = pyqtSignal()
+    _end_signal = pyqtSignal()
     
     def __init__(self):
+        super().__init__()
         self.listener: Optional[keyboard.Listener] = None
         self.callbacks = {
             'page_up': [],
@@ -18,32 +23,53 @@ class KeyboardListener:
             'end': []
         }
         self._lock = threading.Lock()
+        self._page_up_signal.connect(self._dispatch_page_up, Qt.ConnectionType.QueuedConnection)
+        self._esc_signal.connect(self._dispatch_esc, Qt.ConnectionType.QueuedConnection)
+        self._end_signal.connect(self._dispatch_end, Qt.ConnectionType.QueuedConnection)
     
     def on_press(self, key):
         """Handle key press events"""
         try:
-            with self._lock:
-                if key == keyboard.Key.page_up:
-                    for callback in self.callbacks['page_up']:
-                        callback()
-                elif key == keyboard.Key.esc:
-                    for callback in self.callbacks['esc']:
-                        callback()
-                elif key == keyboard.Key.end:
-                    for callback in self.callbacks['end']:
-                        callback()
+            if key == keyboard.Key.page_up:
+                self._page_up_signal.emit()
+            elif key == keyboard.Key.esc:
+                self._esc_signal.emit()
+            elif key == keyboard.Key.end:
+                self._end_signal.emit()
         except AttributeError:
             pass
+    
+    def _run_callbacks(self, key: str):
+        with self._lock:
+            callbacks = list(self.callbacks.get(key, []))
+        for callback in callbacks:
+            callback()
+    
+    @pyqtSlot()
+    def _dispatch_page_up(self):
+        self._run_callbacks('page_up')
+    
+    @pyqtSlot()
+    def _dispatch_esc(self):
+        self._run_callbacks('esc')
+    
+    @pyqtSlot()
+    def _dispatch_end(self):
+        self._run_callbacks('end')
     
     def register_callback(self, key: str, callback: Callable):
         """Register a callback for a specific key"""
         if key in self.callbacks:
-            self.callbacks[key].append(callback)
+            with self._lock:
+                if callback not in self.callbacks[key]:
+                    self.callbacks[key].append(callback)
     
     def unregister_callback(self, key: str, callback: Callable):
         """Unregister a callback"""
-        if key in self.callbacks and callback in self.callbacks[key]:
-            self.callbacks[key].remove(callback)
+        if key in self.callbacks:
+            with self._lock:
+                if callback in self.callbacks[key]:
+                    self.callbacks[key].remove(callback)
     
     def start(self):
         """Start listening to keyboard events"""
