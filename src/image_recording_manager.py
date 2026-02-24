@@ -4,6 +4,7 @@ Image Recording Manager - Handles the complete flow of image-based click recordi
 from typing import Callable, List, Tuple, Optional
 import os
 import time
+import re
 from PyQt6.QtWidgets import QMessageBox
 from src.keyboard_listener import KeyboardListener
 from src.image_matcher import ImageMatcher
@@ -51,7 +52,7 @@ class ImageRecordingManager:
         """Start image recording process"""
         self.is_recording = True
         self.recorded_images.clear()
-        self.current_image_num = 0
+        self.current_image_num = self._get_last_image_index()
         
         # Register keyboard callbacks
         self.keyboard_listener.register_callback('esc', self._on_esc)
@@ -60,6 +61,22 @@ class ImageRecordingManager:
         
         # First, let user select target window
         self._show_window_picker()
+    
+    def _get_last_image_index(self) -> int:
+        """Get the highest existing image index in scripts/images."""
+        images_dir = "scripts/images"
+        if not os.path.isdir(images_dir):
+            return 0
+        
+        max_index = 0
+        pattern = re.compile(r"^image_(\d+)\.png$", re.IGNORECASE)
+        for filename in os.listdir(images_dir):
+            match = pattern.match(filename)
+            if match:
+                idx = int(match.group(1))
+                if idx > max_index:
+                    max_index = idx
+        return max_index
     
     def _show_window_picker(self):
         """Show window picker dialog"""
