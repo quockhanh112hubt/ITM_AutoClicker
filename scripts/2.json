@@ -1,0 +1,33 @@
+{
+  "version": "1.0",
+  "actions": [
+    {
+      "type": "image",
+      "data": {
+        "image_path": "scripts/images\\image_1.png",
+        "offset_x": 0,
+        "offset_y": 0,
+        "click_x": 1391,
+        "click_y": 180,
+        "click_client_x": 73,
+        "click_client_y": 69,
+        "target_hwnd": 722758,
+        "target_title": "OnlyVid"
+      }
+    },
+    {
+      "type": "image",
+      "data": {
+        "image_path": "scripts/images\\image_2.png",
+        "offset_x": 0,
+        "offset_y": 0,
+        "click_x": 1745,
+        "click_y": 164,
+        "click_client_x": 427,
+        "click_client_y": 53,
+        "target_hwnd": 722758,
+        "target_title": "OnlyVid"
+      }
+    }
+  ]
+}

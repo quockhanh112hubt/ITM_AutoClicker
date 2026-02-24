@@ -339,7 +339,9 @@ class MainWindow(QMainWindow):
                 image_path = action.data.get('image_path', '')
                 offset_x = action.data.get('offset_x', 0)
                 offset_y = action.data.get('offset_y', 0)
-                details = f"Image: {os.path.basename(image_path)} | Offset: ({offset_x}, {offset_y})"
+                target_title = action.data.get('target_title', '')
+                target_part = f" | Target: {target_title}" if target_title else ""
+                details = f"Image: {os.path.basename(image_path)} | Offset: ({offset_x}, {offset_y}){target_part}"
             
             item_details = QTableWidgetItem(details)
             item_details.setFlags(item_details.flags() & ~Qt.ItemFlag.ItemIsEditable)
@@ -400,15 +402,19 @@ class MainWindow(QMainWindow):
         self.image_recording_manager.start()
         self.statusBar.showMessage("Image recording started. Select target window...")
     
-    def on_image_recorded(self, image_path: str, click_x: int, click_y: int, total_count: int):
+    def on_image_recorded(self, recorded: dict, total_count: int):
         """Handle one image+click position recorded and persist it immediately"""
         action = ClickAction(
             ClickType.IMAGE,
-            image_path=image_path,
+            image_path=recorded.get("image_path", ""),
             offset_x=0,
             offset_y=0,
-            click_x=click_x,
-            click_y=click_y
+            click_x=recorded.get("click_x"),
+            click_y=recorded.get("click_y"),
+            click_client_x=recorded.get("click_client_x"),
+            click_client_y=recorded.get("click_client_y"),
+            target_hwnd=recorded.get("target_hwnd"),
+            target_title=recorded.get("target_title", "")
         )
         self.current_script.add_action(action)
         self.update_table()

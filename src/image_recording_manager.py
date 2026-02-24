@@ -12,6 +12,7 @@ from src.window_region_selector import WindowRegionSelector
 from src.image_dialogs import ImageConfirmationDialog, ClickPositionDialog
 from pynput import mouse
 from PIL import Image
+import win32gui
 
 
 class ImageRecordingManager:
@@ -37,7 +38,7 @@ class ImageRecordingManager:
         self.on_image_recorded = on_image_recorded
         self.parent = parent
         
-        self.recorded_images: List[Tuple[str, int, int]] = []  # (image_path, click_x, click_y)
+        self.recorded_images: List[dict] = []
         self.is_recording = False
         self.current_image_num = 0
         
@@ -190,7 +191,28 @@ class ImageRecordingManager:
         # If waiting for click position, record it
         if hasattr(self, '_waiting_for_click_position') and self._waiting_for_click_position:
             # Store the image with click position
-            recorded = (self._waiting_image_path, int(x), int(y))
+            click_client_x = None
+            click_client_y = None
+            target_hwnd = None
+            target_title = ""
+            if self.target_window:
+                target_hwnd = int(self.target_window.hwnd)
+                target_title = self.target_window.title
+                try:
+                    click_client_x, click_client_y = win32gui.ScreenToClient(target_hwnd, (int(x), int(y)))
+                except Exception:
+                    click_client_x = None
+                    click_client_y = None
+
+            recorded = {
+                "image_path": self._waiting_image_path,
+                "click_x": int(x),
+                "click_y": int(y),
+                "click_client_x": click_client_x,
+                "click_client_y": click_client_y,
+                "target_hwnd": target_hwnd,
+                "target_title": target_title
+            }
             self.recorded_images.append(recorded)
             
             self._waiting_for_click_position = False
@@ -206,7 +228,7 @@ class ImageRecordingManager:
             # Immediately persist each captured item through callback.
             if self.on_image_recorded:
                 try:
-                    self.on_image_recorded(*recorded, current_count)
+                    self.on_image_recorded(recorded, current_count)
                 except Exception as e:
                     print(f"[WARN] on_image_recorded callback failed: {e}")
             
