@@ -100,11 +100,28 @@ class AutoClicker:
         image_path = action.data.get('image_path', '')
         offset_x = action.data.get('offset_x', 0)
         offset_y = action.data.get('offset_y', 0)
+        click_x = action.data.get('click_x')
+        click_y = action.data.get('click_y')
         
         if os.path.exists(image_path):
-            result = self.image_matcher.click_on_image(image_path, (offset_x, offset_y))
-            if result:
-                self._notify_status(f"Found and clicked image: {os.path.basename(image_path)}")
+            match_pos = self.image_matcher.find_image(image_path)
+            if match_pos:
+                # Preferred behavior: image is a trigger condition,
+                # click at recorded absolute position from PAGE UP.
+                if click_x is not None and click_y is not None:
+                    pyautogui.click(int(click_x), int(click_y))
+                    self._notify_status(
+                        f"Image found: {os.path.basename(image_path)} -> clicked recorded position ({int(click_x)}, {int(click_y)})"
+                    )
+                else:
+                    # Backward compatibility for old scripts without click_x/click_y.
+                    x, y = match_pos
+                    x += offset_x
+                    y += offset_y
+                    pyautogui.click(x, y)
+                    self._notify_status(
+                        f"Image found: {os.path.basename(image_path)} -> clicked image position ({x}, {y})"
+                    )
             else:
                 self._notify_status(f"Image not found: {os.path.basename(image_path)}")
         else:
