@@ -1,0 +1,94 @@
+ITM AutoClicker - Ung Dung Tu Dong Click Chuot
+================================================
+
+QUICK START (Co tuc nhat):
+==========================
+
+1. Bat dau:
+   - Open Command Prompt or PowerShell
+   - Navigate to: E:\GitHub\ITM_AutoClicker
+   - Type: python main.py
+
+2. Neu loi (ImportError):
+   - Type: python -m venv .venv
+   - Type: .venv\Scripts\activate
+   - Type: pip install -r requirements.txt
+   - Type: python main.py
+
+FEATURES:
+=========
+✓ Click theo vi tri (toa do x, y)
+✓ Click theo hinh anh (template matching)
+✓ Phim tac: PAGE UP, ESC, END
+✓ Luu/Tai kich ban (JSON format)
+✓ Delay co the tuy chinh (ms)
+✓ GUI dung PyQt6
+
+HOW TO USE:
+===========
+
+1. Mo ung dung:
+   python main.py
+
+2. Tao kich ban:
+   - Click "Add Action"
+   - Chon "Position Based Click" hoac "Image Based Click"
+
+3. Position-Based Click:
+   - Di chuot den vi tri muon click
+   - Nhan PAGE UP de ghi
+   - Nhan ESC khi xong
+
+4. Image-Based Click:
+   - Keo chuot chon vung anh
+   - Thaa chuot
+   - Di chuot den vi tri click
+   - Nhan PAGE UP
+   - Chon Yes hoac No
+
+5. Chay kich ban:
+   - Click "Start" hoac nhan END
+   - Click "Stop" hoac nhan END de dung
+
+PHIM TAC (HOTKEYS):
+===================
+PAGE UP   -> Ghi vi tri / Xac nhan click
+ESC       -> Thoat mode ghi
+END       -> Bat dau / Dung
+
+SETTINGS:
+=========
+Tab "Settings" de cai dat:
+- Click Delay: Thoi gian giua cac click (ms)
+- Default: 100ms
+
+TAI LIEU:
+=========
+- README.md: Huong dan chi tiet
+- DEVELOPMENT.md: Cho developer
+- QUICKSTART.py: Huong dan tương tac
+- FINAL_REPORT.md: Chi tiet du an
+
+CONG NGHE:
+==========
+- Python 3.8+
+- PyQt6 (GUI)
+- OpenCV (Hinh anh)
+- pynput (Phim tac)
+
+SUPPORT:
+========
+Loi? Xem:
+1. QUICKSTART.py: python QUICKSTART.py
+2. README.md
+3. DEVELOPMENT.md
+
+LIEN HE:
+========
+GitHub: https://github.com/quockhanh112hubt
+
+VERSION: 1.0.0
+STATUS: Ready to Use
+LICENSE: MIT
+
+Chuc ban su dung vui ve! 🎉

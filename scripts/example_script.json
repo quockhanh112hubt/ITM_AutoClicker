@@ -1,0 +1,40 @@
+{
+  "version": "1.0",
+  "actions": [
+    {
+      "type": "position",
+      "data": {
+        "x": 500,
+        "y": 300,
+        "description": "Click button 1"
+      }
+    },
+    {
+      "type": "position",
+      "data": {
+        "x": 700,
+        "y": 400,
+        "description": "Click button 2"
+      }
+    },
+    {
+      "type": "position",
+      "data": {
+        "x": 900,
+        "y": 500,
+        "description": "Click button 3"
+      }
+    },
+    {
+      "type": "image",
+      "data": {
+        "image_path": "scripts/images/screenshot.png",
+        "offset_x": 0,
+        "offset_y": 0,
+        "click_x": 100,
+        "click_y": 100,
+        "description": "Click on found image"
+      }
+    }
+  ]
+}

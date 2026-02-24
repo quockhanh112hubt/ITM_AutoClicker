@@ -1,0 +1,33 @@
+{
+  "version": "1.0",
+  "actions": [
+    {
+      "type": "position",
+      "data": {
+        "x": -980,
+        "y": 235
+      }
+    },
+    {
+      "type": "position",
+      "data": {
+        "x": -680,
+        "y": 382
+      }
+    },
+    {
+      "type": "position",
+      "data": {
+        "x": -717,
+        "y": 451
+      }
+    },
+    {
+      "type": "position",
+      "data": {
+        "x": -634,
+        "y": 253
+      }
+    }
+  ]
+}
