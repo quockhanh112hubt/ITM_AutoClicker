@@ -95,15 +95,18 @@ class AutoClicker:
         """Execute position-based click"""
         x = action.data.get('x', 0)
         y = action.data.get('y', 0)
+        client_x = action.data.get('client_x')
+        client_y = action.data.get('client_y')
         target_hwnd = action.data.get('target_hwnd')
         if target_hwnd:
             ok, error = self._validate_target_window(int(target_hwnd))
             if not ok:
                 self._stop_due_to_target_error(error)
                 return
-            client_x, client_y = win32gui.ScreenToClient(int(target_hwnd), (int(x), int(y)))
+            if client_x is None or client_y is None:
+                client_x, client_y = win32gui.ScreenToClient(int(target_hwnd), (int(x), int(y)))
             self._post_click_client(int(target_hwnd), int(client_x), int(client_y))
-            self._notify_status(f"Clicked target hwnd={target_hwnd} at client ({client_x}, {client_y})")
+            self._notify_status(f"Clicked target hwnd={target_hwnd} at client ({int(client_x)}, {int(client_y)})")
             return
         
         pyautogui.click(int(x), int(y))

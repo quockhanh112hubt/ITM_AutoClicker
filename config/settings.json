@@ -1,5 +1,5 @@
 {
-  "click_delay_ms": 1000,
+  "click_delay_ms": 5000,
   "image_confidence": 0.8,
   "auto_save": true,
   "last_script": null

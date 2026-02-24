@@ -18,8 +18,10 @@ from src.auto_clicker import AutoClicker
 from src.keyboard_listener import KeyboardListener
 from src.image_matcher import ImageMatcher
 from src.image_recording_manager import ImageRecordingManager
+from src.window_picker import WindowPickerDialog
 from pynput import mouse
 import threading
+import win32gui
 
 
 class SettingsDialog(QDialog):
@@ -177,6 +179,7 @@ class MainWindow(QMainWindow):
         self.position_recorder = None
         self.image_recorder = None
         self.image_recording_manager = None
+        self.position_target_window = None
         
         # Setup UI
         self.setup_ui()
@@ -334,7 +337,9 @@ class MainWindow(QMainWindow):
             if action.type == ClickType.POSITION:
                 x = action.data.get('x', 0)
                 y = action.data.get('y', 0)
-                details = f"Position: ({x}, {y})"
+                target_title = action.data.get('target_title', '')
+                target_part = f" | Target: {target_title}" if target_title else ""
+                details = f"Position: ({x}, {y}){target_part}"
             else:
                 image_path = action.data.get('image_path', '')
                 offset_x = action.data.get('offset_x', 0)
@@ -360,9 +365,21 @@ class MainWindow(QMainWindow):
     
     def start_position_recording(self):
         """Start recording positions"""
+        # Select target window first so position clicks can run in background.
+        picker = WindowPickerDialog(parent=self)
+        if not picker.exec():
+            self.statusBar.showMessage("Position recording cancelled (no target window selected)")
+            return
+        
+        self.position_target_window = picker.get_selected_window()
+        if not self.position_target_window:
+            self.statusBar.showMessage("Position recording cancelled (invalid target window)")
+            return
+        
         reply = QMessageBox.information(
             self,
             "Position Recording",
+            f"Target: {self.position_target_window.title}\n\n"
             "Move mouse to desired positions and press PAGE UP to record each position.\n"
             "Press ESC when finished.",
             QMessageBox.StandardButton.Ok
@@ -383,8 +400,28 @@ class MainWindow(QMainWindow):
     def on_position_recording_cancelled(self, positions):
         """Handle position recording cancelled"""
         if positions:
+            target_hwnd = None
+            target_title = ""
+            if self.position_target_window:
+                target_hwnd = int(self.position_target_window.hwnd)
+                target_title = self.position_target_window.title
+            
             for x, y in positions:
-                action = ClickAction(ClickType.POSITION, x=x, y=y)
+                action_data = {
+                    "x": int(x),
+                    "y": int(y),
+                }
+                if target_hwnd is not None:
+                    action_data["target_hwnd"] = target_hwnd
+                    action_data["target_title"] = target_title
+                    try:
+                        client_x, client_y = win32gui.ScreenToClient(target_hwnd, (int(x), int(y)))
+                        action_data["client_x"] = int(client_x)
+                        action_data["client_y"] = int(client_y)
+                    except Exception:
+                        pass
+                
+                action = ClickAction(ClickType.POSITION, **action_data)
                 self.current_script.add_action(action)
             self.update_table()
             self.statusBar.showMessage(f"Added {len(positions)} position-based click(s)")
