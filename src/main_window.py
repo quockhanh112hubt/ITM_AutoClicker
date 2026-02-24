@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox, QRadioButton, QButtonGroup, QStatusBar
 )
 from PyQt6.QtCore import Qt, QTimer, QSize
-from PyQt6.QtGui import QFont, QColor
+from PyQt6.QtGui import QFont, QColor, QPixmap
 from src.click_script import ClickScript, ClickAction, ClickType
 from src.config import Config
 from src.auto_clicker import AutoClicker
@@ -230,9 +230,11 @@ class MainWindow(QMainWindow):
         # Table for actions
         self.action_table = QTableWidget()
         self.action_table.setColumnCount(4)
-        self.action_table.setHorizontalHeaderLabels(["#", "Type", "Details", ""])
+        self.action_table.setHorizontalHeaderLabels(["#", "Type", "Image", "Details"])
+        self.action_table.setColumnWidth(0, 50)
         self.action_table.setColumnWidth(1, 150)
-        self.action_table.setColumnWidth(2, 300)
+        self.action_table.setColumnWidth(2, 110)
+        self.action_table.setColumnWidth(3, 500)
         layout.addWidget(self.action_table)
         
         # Buttons layout
@@ -323,6 +325,8 @@ class MainWindow(QMainWindow):
         self.action_table.setRowCount(len(self.current_script.get_actions()))
         
         for i, action in enumerate(self.current_script.get_actions()):
+            self.action_table.setRowHeight(i, 56)
+
             # Index
             item_index = QTableWidgetItem(str(i + 1))
             item_index.setFlags(item_index.flags() & ~Qt.ItemFlag.ItemIsEditable)
@@ -333,6 +337,25 @@ class MainWindow(QMainWindow):
             item_type.setFlags(item_type.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.action_table.setItem(i, 1, item_type)
             
+            # Image preview
+            preview_label = QLabel("-")
+            preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            if action.type == ClickType.IMAGE:
+                image_path = action.data.get('image_path', '')
+                if image_path and os.path.exists(image_path):
+                    pixmap = QPixmap(image_path)
+                    if not pixmap.isNull():
+                        preview_label.setPixmap(
+                            pixmap.scaled(
+                                96,
+                                48,
+                                Qt.AspectRatioMode.KeepAspectRatio,
+                                Qt.TransformationMode.SmoothTransformation
+                            )
+                        )
+                        preview_label.setText("")
+            self.action_table.setCellWidget(i, 2, preview_label)
+
             # Details
             if action.type == ClickType.POSITION:
                 x = action.data.get('x', 0)
@@ -350,7 +373,7 @@ class MainWindow(QMainWindow):
             
             item_details = QTableWidgetItem(details)
             item_details.setFlags(item_details.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.action_table.setItem(i, 2, item_details)
+            self.action_table.setItem(i, 3, item_details)
     
     def on_add_action(self):
         """Handle add action button"""
