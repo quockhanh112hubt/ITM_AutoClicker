@@ -394,28 +394,35 @@ class MainWindow(QMainWindow):
         self.image_recording_manager = ImageRecordingManager(
             on_complete=self.on_image_recording_complete,
             on_cancel=self.on_image_recording_cancelled,
+            on_image_recorded=self.on_image_recorded,
             parent=self
         )
         self.image_recording_manager.start()
         self.statusBar.showMessage("Image recording started. Select target window...")
     
+    def on_image_recorded(self, image_path: str, click_x: int, click_y: int, total_count: int):
+        """Handle one image+click position recorded and persist it immediately"""
+        action = ClickAction(
+            ClickType.IMAGE,
+            image_path=image_path,
+            offset_x=0,
+            offset_y=0,
+            click_x=click_x,
+            click_y=click_y
+        )
+        self.current_script.add_action(action)
+        self.update_table()
+        self.statusBar.showMessage(
+            f"Recorded {total_count} image action(s). Continue selecting, press ESC to finish."
+        )
+    
     def on_image_recording_complete(self, recorded_images):
-        """Handle image recording complete - recorded_images is list of (image_path, click_x, click_y) tuples"""
-        if recorded_images:
-            for image_path, click_x, click_y in recorded_images:
-                action = ClickAction(
-                    ClickType.IMAGE,
-                    image_path=image_path,
-                    offset_x=0,
-                    offset_y=0,
-                    click_x=click_x,
-                    click_y=click_y
-                )
-                self.current_script.add_action(action)
-            self.update_table()
-            self.statusBar.showMessage(f"Added {len(recorded_images)} image-based click(s)")
+        """Handle image recording complete"""
+        count = len(recorded_images) if recorded_images else 0
+        if count > 0:
+            self.statusBar.showMessage(f"Image recording finished. Total recorded: {count}")
         else:
-            self.statusBar.showMessage("No images recorded")
+            self.statusBar.showMessage("Image recording finished. No images recorded.")
     
     def on_image_recording_cancelled(self):
         """Handle image recording cancelled"""

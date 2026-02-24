@@ -17,7 +17,13 @@ from PIL import Image
 class ImageRecordingManager:
     """Manages the complete image recording workflow"""
     
-    def __init__(self, on_complete: Callable = None, on_cancel: Callable = None, parent=None):
+    def __init__(
+        self,
+        on_complete: Callable = None,
+        on_cancel: Callable = None,
+        on_image_recorded: Callable = None,
+        parent=None
+    ):
         """
         Initialize image recording manager
         
@@ -28,6 +34,7 @@ class ImageRecordingManager:
         """
         self.on_complete = on_complete
         self.on_cancel = on_cancel
+        self.on_image_recorded = on_image_recorded
         self.parent = parent
         
         self.recorded_images: List[Tuple[str, int, int]] = []  # (image_path, click_x, click_y)
@@ -164,8 +171,8 @@ class ImageRecordingManager:
                 os.remove(image_path)
             except:
                 pass
-            # Ask whether to continue
-            self._ask_continue_recording()
+            # Continue with next image capture
+            self._start_next_image()
 
         dialog.recording_cancelled.connect(on_cancelled)
 
@@ -183,13 +190,11 @@ class ImageRecordingManager:
         # If waiting for click position, record it
         if hasattr(self, '_waiting_for_click_position') and self._waiting_for_click_position:
             # Store the image with click position
-            self.recorded_images.append((
-                self._waiting_image_path,
-                int(x),
-                int(y)
-            ))
+            recorded = (self._waiting_image_path, int(x), int(y))
+            self.recorded_images.append(recorded)
             
             self._waiting_for_click_position = False
+            current_count = len(self.recorded_images)
             
             # Update dialog if it exists
             if self.image_dialogs:
@@ -198,30 +203,15 @@ class ImageRecordingManager:
                     last_dialog.update_position(int(x), int(y))
                     last_dialog.close()
             
-            # Ask if user wants to continue with more images
-            self._ask_continue_recording()
-    
-    def _ask_continue_recording(self):
-        """Ask user if they want to record more images"""
-        from PyQt6.QtWidgets import QMessageBox, QApplication
-        
-        # Get the main window
-        app = QApplication.instance()
-        if app is None:
-            return
-        
-        reply = QMessageBox.question(
-            None,
-            "Continue Recording?",
-            f"Image {self.current_image_num} recorded successfully!\n\n"
-            f"Do you want to record another image?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-        
-        if reply == QMessageBox.StandardButton.Yes:
+            # Immediately persist each captured item through callback.
+            if self.on_image_recorded:
+                try:
+                    self.on_image_recorded(*recorded, current_count)
+                except Exception as e:
+                    print(f"[WARN] on_image_recorded callback failed: {e}")
+            
+            # Continue recording loop until user presses ESC.
             self._start_next_image()
-        else:
-            self._finish_recording()
     
     def _on_esc(self):
         """Handle ESC key press"""
