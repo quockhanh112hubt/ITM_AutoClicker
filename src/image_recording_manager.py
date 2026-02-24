@@ -82,10 +82,8 @@ class ImageRecordingManager:
         if not self.target_window:
             return
         
-        self.region_selector = WindowRegionSelector(
-            self.target_window.hwnd,
-            on_region_selected=self._on_region_selected
-        )
+        # Use Qt signal only to avoid duplicate callbacks.
+        self.region_selector = WindowRegionSelector(self.target_window.hwnd)
         
         # Connect signal and show
         self.region_selector.region_selected.connect(self._on_region_selected)
