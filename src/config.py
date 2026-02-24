@@ -11,6 +11,7 @@ class Config:
     
     DEFAULT_CONFIG = {
         "click_delay_ms": 100,
+        "priority_cooldown_ms": 800,
         "image_confidence": 0.8,
         "auto_save": True,
         "last_script": None

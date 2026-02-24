@@ -1,0 +1,53 @@
+{
+  "version": "1.0",
+  "actions": [
+    {
+      "type": "image",
+      "data": {
+        "image_path": "scripts/images\\image_12.png",
+        "offset_x": 0,
+        "offset_y": 0,
+        "click_x": 464,
+        "click_y": 153,
+        "click_client_x": 464,
+        "click_client_y": 153,
+        "target_hwnd": 67296,
+        "target_title": "GS1 Barcode Decoder - Brave",
+        "priority_level": 1
+      }
+    },
+    {
+      "type": "position",
+      "data": {
+        "x": 521,
+        "y": 156,
+        "target_hwnd": 67296,
+        "target_title": "GS1 Barcode Decoder - Brave",
+        "client_x": 521,
+        "client_y": 156
+      }
+    },
+    {
+      "type": "position",
+      "data": {
+        "x": 452,
+        "y": 376,
+        "target_hwnd": 67296,
+        "target_title": "GS1 Barcode Decoder - Brave",
+        "client_x": 452,
+        "client_y": 376
+      }
+    },
+    {
+      "type": "position",
+      "data": {
+        "x": 414,
+        "y": 590,
+        "target_hwnd": 67296,
+        "target_title": "GS1 Barcode Decoder - Brave",
+        "client_x": 414,
+        "client_y": 590
+      }
+    }
+  ]
+}

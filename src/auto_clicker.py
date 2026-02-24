@@ -16,24 +16,31 @@ import win32gui
 class AutoClicker:
     """Engine for recording and executing click scripts"""
     
-    def __init__(self, delay_ms: int = 100):
+    def __init__(self, delay_ms: int = 100, priority_cooldown_ms: int = 800):
         """
         Initialize auto clicker
         
         Args:
             delay_ms: Delay between clicks in milliseconds
+            priority_cooldown_ms: Cooldown for priority image actions in milliseconds
         """
         self.delay_ms = delay_ms
+        self.priority_cooldown_ms = max(0, priority_cooldown_ms)
         self.is_running = False
         self.is_paused = False
         self.current_script: Optional[ClickScript] = None
         self.image_matcher = ImageMatcher(confidence=0.8)
         self._execution_thread: Optional[threading.Thread] = None
         self._on_status_changed: Optional[Callable] = None
+        self._priority_last_trigger_at = {}
     
     def set_delay(self, delay_ms: int):
         """Set delay between clicks"""
         self.delay_ms = max(0, delay_ms)
+    
+    def set_priority_cooldown(self, cooldown_ms: int):
+        """Set cooldown for priority actions"""
+        self.priority_cooldown_ms = max(0, cooldown_ms)
     
     def set_on_status_changed(self, callback: Callable):
         """Set callback for status changes"""
@@ -56,6 +63,7 @@ class AutoClicker:
         
         self.current_script = script
         self.is_running = True
+        self._priority_last_trigger_at.clear()
         self._notify_status("Starting auto click...")
         
         self._execution_thread = threading.Thread(target=self._execute_loop, daemon=True)
@@ -88,8 +96,66 @@ class AutoClicker:
                 # Wait delay between clicks
                 if i < len(self.current_script.get_actions()) - 1:
                     time.sleep(self.delay_ms / 1000.0)
+                    self._execute_priority_actions()
             except Exception as e:
                 self._notify_status(f"Error executing action {i}: {e}")
+    
+    def _execute_priority_actions(self):
+        """Execute currently-triggered priority image actions in ascending priority order."""
+        if not self.current_script or not self.is_running:
+            return
+        
+        candidates = []
+        for idx, action in enumerate(self.current_script.get_actions()):
+            if action.type != ClickType.IMAGE:
+                continue
+            level = int(action.data.get('priority_level', 0) or 0)
+            if level > 0:
+                candidates.append((level, idx, action))
+        
+        if not candidates:
+            return
+        
+        candidates.sort(key=lambda item: (item[0], item[1]))
+        cooldown_sec = self.priority_cooldown_ms / 1000.0
+        clicked_count = 0
+        
+        for level, idx, action in candidates:
+            if not self.is_running:
+                break
+            
+            now = time.time()
+            last = self._priority_last_trigger_at.get(idx, 0.0)
+            if cooldown_sec > 0 and (now - last) < cooldown_sec:
+                continue
+            
+            if self._is_image_action_triggered(action):
+                self._execute_image_click(action)
+                self._priority_last_trigger_at[idx] = time.time()
+                clicked_count += 1
+                time.sleep(self.delay_ms / 1000.0)
+        
+        if clicked_count > 0:
+            self._notify_status(f"Priority handled: {clicked_count} action(s). Resume normal sequence.")
+    
+    def _is_image_action_triggered(self, action: ClickAction) -> bool:
+        """Check whether image condition for an image action is currently met."""
+        image_path = action.data.get('image_path', '')
+        target_hwnd = action.data.get('target_hwnd')
+        target_title = action.data.get('target_title', '')
+        
+        if not os.path.exists(image_path):
+            return False
+        
+        if target_hwnd is not None:
+            target_hwnd = int(target_hwnd)
+            ok, error = self._validate_target_window(target_hwnd)
+            if not ok:
+                self._stop_due_to_target_error(error, target_title)
+                return False
+            return self.image_matcher.find_image_in_window(image_path, target_hwnd) is not None
+        
+        return self.image_matcher.find_image(image_path) is not None
     
     def _execute_position_click(self, action: ClickAction):
         """Execute position-based click"""

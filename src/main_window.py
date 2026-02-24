@@ -8,7 +8,8 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTableWidget, QTableWidgetItem, QTabWidget,
     QLabel, QSpinBox, QFileDialog, QMessageBox, QDialog,
-    QDialogButtonBox, QRadioButton, QButtonGroup, QStatusBar
+    QDialogButtonBox, QRadioButton, QButtonGroup, QStatusBar,
+    QInputDialog
 )
 from PyQt6.QtCore import Qt, QTimer, QSize
 from PyQt6.QtGui import QFont, QColor, QPixmap
@@ -164,7 +165,10 @@ class MainWindow(QMainWindow):
         self.config = Config()
         
         # Initialize auto clicker
-        self.auto_clicker = AutoClicker(self.config.get("click_delay_ms", 100))
+        self.auto_clicker = AutoClicker(
+            self.config.get("click_delay_ms", 100),
+            self.config.get("priority_cooldown_ms", 800)
+        )
         self.auto_clicker.set_on_status_changed(self.on_status_changed)
         
         # Initialize keyboard listener for Start/Stop
@@ -229,12 +233,13 @@ class MainWindow(QMainWindow):
         
         # Table for actions
         self.action_table = QTableWidget()
-        self.action_table.setColumnCount(4)
-        self.action_table.setHorizontalHeaderLabels(["#", "Type", "Image", "Details"])
+        self.action_table.setColumnCount(5)
+        self.action_table.setHorizontalHeaderLabels(["#", "Type", "Image", "Priority", "Details"])
         self.action_table.setColumnWidth(0, 50)
         self.action_table.setColumnWidth(1, 150)
         self.action_table.setColumnWidth(2, 110)
-        self.action_table.setColumnWidth(3, 500)
+        self.action_table.setColumnWidth(3, 90)
+        self.action_table.setColumnWidth(4, 450)
         layout.addWidget(self.action_table)
         
         # Buttons layout
@@ -249,6 +254,11 @@ class MainWindow(QMainWindow):
         btn_remove = QPushButton("Remove Action")
         btn_remove.clicked.connect(self.on_remove_action)
         button_layout.addWidget(btn_remove)
+        
+        # Priority button (IMAGE actions)
+        btn_priority = QPushButton("Set Priority")
+        btn_priority.clicked.connect(self.on_set_priority)
+        button_layout.addWidget(btn_priority)
         
         # Clear button
         btn_clear = QPushButton("Clear All")
@@ -315,6 +325,20 @@ class MainWindow(QMainWindow):
         delay_layout.addStretch()
         layout.addLayout(delay_layout)
         
+        # Priority cooldown setting
+        priority_layout = QHBoxLayout()
+        priority_label = QLabel("Priority Cooldown (ms):")
+        self.priority_cooldown_spinbox = QSpinBox()
+        self.priority_cooldown_spinbox.setMinimum(0)
+        self.priority_cooldown_spinbox.setMaximum(60000)
+        self.priority_cooldown_spinbox.setValue(self.config.get("priority_cooldown_ms", 800))
+        self.priority_cooldown_spinbox.valueChanged.connect(self.on_priority_cooldown_changed)
+        
+        priority_layout.addWidget(priority_label)
+        priority_layout.addWidget(self.priority_cooldown_spinbox)
+        priority_layout.addStretch()
+        layout.addLayout(priority_layout)
+        
         layout.addStretch()
         
         tab.setLayout(layout)
@@ -355,6 +379,17 @@ class MainWindow(QMainWindow):
                         )
                         preview_label.setText("")
             self.action_table.setCellWidget(i, 2, preview_label)
+            
+            # Priority
+            if action.type == ClickType.IMAGE:
+                priority_level = int(action.data.get('priority_level', 0) or 0)
+                priority_text = f"P{priority_level}" if priority_level > 0 else "-"
+            else:
+                priority_text = "-"
+            item_priority = QTableWidgetItem(priority_text)
+            item_priority.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            item_priority.setFlags(item_priority.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.action_table.setItem(i, 3, item_priority)
 
             # Details
             if action.type == ClickType.POSITION:
@@ -367,13 +402,18 @@ class MainWindow(QMainWindow):
                 image_path = action.data.get('image_path', '')
                 offset_x = action.data.get('offset_x', 0)
                 offset_y = action.data.get('offset_y', 0)
+                priority_level = int(action.data.get('priority_level', 0) or 0)
+                priority_part = f" | Priority: P{priority_level}" if priority_level > 0 else ""
                 target_title = action.data.get('target_title', '')
                 target_part = f" | Target: {target_title}" if target_title else ""
-                details = f"Image: {os.path.basename(image_path)} | Offset: ({offset_x}, {offset_y}){target_part}"
+                details = (
+                    f"Image: {os.path.basename(image_path)} | Offset: ({offset_x}, {offset_y})"
+                    f"{priority_part}{target_part}"
+                )
             
             item_details = QTableWidgetItem(details)
             item_details.setFlags(item_details.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.action_table.setItem(i, 3, item_details)
+            self.action_table.setItem(i, 4, item_details)
     
     def on_add_action(self):
         """Handle add action button"""
@@ -474,7 +514,8 @@ class MainWindow(QMainWindow):
             click_client_x=recorded.get("click_client_x"),
             click_client_y=recorded.get("click_client_y"),
             target_hwnd=recorded.get("target_hwnd"),
-            target_title=recorded.get("target_title", "")
+            target_title=recorded.get("target_title", ""),
+            priority_level=0
         )
         self.current_script.add_action(action)
         self.update_table()
@@ -502,6 +543,43 @@ class MainWindow(QMainWindow):
             self.current_script.remove_action(current_row)
             self.update_table()
             self.statusBar.showMessage("Action removed")
+    
+    def on_set_priority(self):
+        """Set priority for selected IMAGE action"""
+        row = self.action_table.currentRow()
+        if row < 0:
+            self.statusBar.showMessage("Select an action row first")
+            return
+        
+        actions = self.current_script.get_actions()
+        if row >= len(actions):
+            self.statusBar.showMessage("Invalid selected row")
+            return
+        
+        action = actions[row]
+        if action.type != ClickType.IMAGE:
+            QMessageBox.information(self, "Set Priority", "Priority is available only for IMAGE actions.")
+            return
+        
+        current_level = int(action.data.get("priority_level", 0) or 0)
+        value, ok = QInputDialog.getInt(
+            self,
+            "Set Priority Level",
+            "Priority level (0 = disabled, 1 = highest):",
+            current_level,
+            0,
+            999,
+            1
+        )
+        if not ok:
+            return
+        
+        action.data["priority_level"] = int(value)
+        self.update_table()
+        if value > 0:
+            self.statusBar.showMessage(f"Row {row + 1} set to priority P{value}")
+        else:
+            self.statusBar.showMessage(f"Priority disabled for row {row + 1}")
     
     def on_clear_all(self):
         """Handle clear all button"""
@@ -577,6 +655,11 @@ class MainWindow(QMainWindow):
         """Handle delay changed"""
         self.auto_clicker.set_delay(value)
         self.config.set("click_delay_ms", value)
+    
+    def on_priority_cooldown_changed(self, value: int):
+        """Handle priority cooldown changed"""
+        self.auto_clicker.set_priority_cooldown(value)
+        self.config.set("priority_cooldown_ms", value)
     
     def on_status_changed(self, message: str):
         """Handle status changed"""
