@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QInputDialog
 )
 from PyQt6.QtCore import Qt, QTimer, QSize
-from PyQt6.QtGui import QFont, QColor, QPixmap
+from PyQt6.QtGui import QFont, QColor, QPixmap, QCursor
 from src.click_script import ClickScript, ClickAction, ClickType
 from src.config import Config
 from src.auto_clicker import AutoClicker
@@ -76,10 +76,11 @@ class SettingsDialog(QDialog):
 class PositionRecorder:
     """Helper class for recording positions"""
     
-    def __init__(self, on_position_recorded=None, on_cancel=None):
+    def __init__(self, on_position_recorded=None, on_cancel=None, on_choose_action=None):
         self.positions = []
         self.on_position_recorded = on_position_recorded
         self.on_cancel = on_cancel
+        self.on_choose_action = on_choose_action
         self.is_recording = False
         self.keyboard_listener = KeyboardListener()
     
@@ -89,12 +90,14 @@ class PositionRecorder:
         self.positions.clear()
         
         self.keyboard_listener.register_callback('page_up', self._on_page_up)
+        self.keyboard_listener.register_callback('page_down', self._on_page_down)
         self.keyboard_listener.register_callback('esc', self._on_esc)
         self.keyboard_listener.start()
     
     def stop(self):
         """Stop recording"""
         self.keyboard_listener.unregister_callback('page_up', self._on_page_up)
+        self.keyboard_listener.unregister_callback('page_down', self._on_page_down)
         self.keyboard_listener.unregister_callback('esc', self._on_esc)
         self.keyboard_listener.stop()
         self.is_recording = False
@@ -104,9 +107,35 @@ class PositionRecorder:
         if self.is_recording:
             mouse_controller = mouse.Controller()
             x, y = mouse_controller.position
-            self.positions.append((int(x), int(y)))
+            self.positions.append({
+                "x": int(x),
+                "y": int(y),
+                "mouse_button": "left"
+            })
             if self.on_position_recorded:
                 self.on_position_recorded(len(self.positions))
+    
+    def _on_page_down(self):
+        """Handle Page Down key press for custom action recording"""
+        if not self.is_recording:
+            return
+        
+        mouse_button = "right"
+        if self.on_choose_action:
+            chosen = self.on_choose_action()
+            if not chosen:
+                return
+            mouse_button = chosen
+        
+        mouse_controller = mouse.Controller()
+        x, y = mouse_controller.position
+        self.positions.append({
+            "x": int(x),
+            "y": int(y),
+            "mouse_button": mouse_button
+        })
+        if self.on_position_recorded:
+            self.on_position_recorded(len(self.positions))
     
     def _on_esc(self):
         """Handle ESC key press"""
@@ -415,28 +444,34 @@ class MainWindow(QMainWindow):
             if action.type == ClickType.POSITION:
                 x = action.data.get('x', 0)
                 y = action.data.get('y', 0)
+                mouse_button = str(action.data.get('mouse_button', 'left')).lower()
+                button_part = f" [{mouse_button.upper()}]"
                 target_title = action.data.get('target_title', '')
                 target_part = f" | Target: {target_title}" if target_title else ""
-                details = f"Position: ({x}, {y}){target_part}"
+                details = f"Position{button_part}: ({x}, {y}){target_part}"
             elif action.type == ClickType.IMAGE:
                 image_path = action.data.get('image_path', '')
                 offset_x = action.data.get('offset_x', 0)
                 offset_y = action.data.get('offset_y', 0)
+                mouse_button = str(action.data.get('mouse_button', 'left')).lower()
+                button_part = f" [{mouse_button.upper()}]"
                 priority_level = int(action.data.get('priority_level', 0) or 0)
                 priority_part = f" | Priority: P{priority_level}" if priority_level > 0 else ""
                 target_title = action.data.get('target_title', '')
                 target_part = f" | Target: {target_title}" if target_title else ""
                 details = (
-                    f"Image: {os.path.basename(image_path)} | Offset: ({offset_x}, {offset_y})"
+                    f"Image{button_part}: {os.path.basename(image_path)} | Offset: ({offset_x}, {offset_y})"
                     f"{priority_part}{target_part}"
                 )
             else:
                 image_path = action.data.get('image_path', '')
+                mouse_button = str(action.data.get('mouse_button', 'left')).lower()
+                button_part = f" [{mouse_button.upper()}]"
                 priority_level = int(action.data.get('priority_level', 0) or 0)
                 priority_part = f" | Priority: P{priority_level}" if priority_level > 0 else ""
                 target_title = action.data.get('target_title', '')
                 target_part = f" | Target: {target_title}" if target_title else ""
-                details = f"Image Direct: {os.path.basename(image_path)}{priority_part}{target_part}"
+                details = f"Image Direct{button_part}: {os.path.basename(image_path)}{priority_part}{target_part}"
             
             item_details = QTableWidgetItem(details)
             item_details.setFlags(item_details.flags() & ~Qt.ItemFlag.ItemIsEditable)
@@ -466,7 +501,8 @@ class MainWindow(QMainWindow):
             self,
             "Position Recording",
             f"Target: {self.selected_target_window.title}\n\n"
-            "Move mouse to desired positions and press PAGE UP to record each position.\n"
+            "PAGE UP: Record Left Click at current mouse position.\n"
+            "PAGE DOWN: Choose action (currently Right Click) and record at current position.\n"
             "Press ESC when finished.",
             QMessageBox.StandardButton.Ok
         )
@@ -474,14 +510,17 @@ class MainWindow(QMainWindow):
         if reply == QMessageBox.StandardButton.Ok:
             self.position_recorder = PositionRecorder(
                 on_position_recorded=self.on_position_recorded,
-                on_cancel=self.on_position_recording_cancelled
+                on_cancel=self.on_position_recording_cancelled,
+                on_choose_action=self._choose_record_action
             )
             self.position_recorder.start()
-            self.statusBar.showMessage("Recording positions... Press PAGE UP to record, ESC to finish")
+            self.statusBar.showMessage("Recording actions... PAGE UP=Left, PAGE DOWN=Choose action, ESC=finish")
     
     def on_position_recorded(self, count: int):
         """Handle position recorded"""
-        self.statusBar.showMessage(f"Recording positions... ({count} recorded) Press PAGE UP to record, ESC to finish")
+        self.statusBar.showMessage(
+            f"Recording actions... ({count} recorded) PAGE UP=Left, PAGE DOWN=Choose action, ESC=finish"
+        )
     
     def on_position_recording_cancelled(self, positions):
         """Handle position recording cancelled"""
@@ -492,10 +531,19 @@ class MainWindow(QMainWindow):
                 target_hwnd = int(self.selected_target_window.hwnd)
                 target_title = self.selected_target_window.title
             
-            for x, y in positions:
+            for pos in positions:
+                if isinstance(pos, dict):
+                    x = int(pos.get("x", 0))
+                    y = int(pos.get("y", 0))
+                    mouse_button = str(pos.get("mouse_button", "left")).lower()
+                else:
+                    # Backward compatibility for older tuple-based records.
+                    x, y = pos
+                    mouse_button = "left"
                 action_data = {
                     "x": int(x),
                     "y": int(y),
+                    "mouse_button": mouse_button if mouse_button in ("left", "right") else "left",
                 }
                 if target_hwnd is not None:
                     action_data["target_hwnd"] = target_hwnd
@@ -513,6 +561,27 @@ class MainWindow(QMainWindow):
             self.statusBar.showMessage(f"Added {len(positions)} position-based click(s)")
         else:
             self.statusBar.showMessage("No positions recorded")
+    
+    def _choose_record_action(self):
+        """Show action chooser for PAGE DOWN during recording."""
+        options = ["Right Click"]
+        dialog = QInputDialog(self)
+        dialog.setWindowTitle("Choose Action")
+        dialog.setLabelText("Select action for current position:")
+        dialog.setComboBoxItems(options)
+        dialog.setTextValue(options[0])
+        dialog.setOkButtonText("OK")
+        dialog.setCancelButtonText("Cancel")
+        
+        pos = QCursor.pos()
+        dialog.move(pos.x() + 12, pos.y() + 12)
+        
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        choice = dialog.textValue()
+        if choice == "Right Click":
+            return "right"
+        return "left"
     
     def start_image_recording(self, image_click_type: ClickType = ClickType.IMAGE):
         """Start recording images using the new manager"""
@@ -548,6 +617,7 @@ class MainWindow(QMainWindow):
             click_y=recorded.get("click_y"),
             click_client_x=recorded.get("click_client_x"),
             click_client_y=recorded.get("click_client_y"),
+            mouse_button=recorded.get("mouse_button", "left"),
             target_hwnd=recorded.get("target_hwnd"),
             target_title=recorded.get("target_title", ""),
             priority_level=1 if is_direct else 0

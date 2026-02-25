@@ -95,7 +95,8 @@ class ClickPositionDialog(QDialog):
         # Instructions
         instructions = QLabel(
             f"Image {image_num} captured!\n\n"
-            "Now position your mouse at the click location and press PAGE UP to confirm.\n"
+            "Now position your mouse at the click location and press PAGE UP to record Left Click.\n"
+            "Press PAGE DOWN to choose action (currently Right Click) and record.\n"
             "You can click anywhere on the screen - it doesn't have to be on the image.\n\n"
             "Press ESC to cancel recording."
         )
@@ -116,9 +117,10 @@ class ClickPositionDialog(QDialog):
         """User clicked close button"""
         self.close()
     
-    def update_position(self, x: int, y: int):
+    def update_position(self, x: int, y: int, mouse_button: str = "left"):
         """Update display with recorded position"""
-        self.info_label.setText(f"OK - Position recorded: ({x}, {y})")
+        button_label = "RIGHT" if str(mouse_button).lower() == "right" else "LEFT"
+        self.info_label.setText(f"OK - {button_label} position recorded: ({x}, {y})")
         self.position_confirmed.emit()
         # Auto-close after position confirmed
         self.accept()

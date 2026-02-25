@@ -11,6 +11,7 @@ from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot, Qt
 class KeyboardListener(QObject):
     """Global keyboard listener for hotkeys"""
     _page_up_signal = pyqtSignal()
+    _page_down_signal = pyqtSignal()
     _esc_signal = pyqtSignal()
     _end_signal = pyqtSignal()
     
@@ -19,11 +20,13 @@ class KeyboardListener(QObject):
         self.listener: Optional[keyboard.Listener] = None
         self.callbacks = {
             'page_up': [],
+            'page_down': [],
             'esc': [],
             'end': []
         }
         self._lock = threading.Lock()
         self._page_up_signal.connect(self._dispatch_page_up, Qt.ConnectionType.QueuedConnection)
+        self._page_down_signal.connect(self._dispatch_page_down, Qt.ConnectionType.QueuedConnection)
         self._esc_signal.connect(self._dispatch_esc, Qt.ConnectionType.QueuedConnection)
         self._end_signal.connect(self._dispatch_end, Qt.ConnectionType.QueuedConnection)
     
@@ -32,6 +35,8 @@ class KeyboardListener(QObject):
         try:
             if key == keyboard.Key.page_up:
                 self._page_up_signal.emit()
+            elif key == keyboard.Key.page_down:
+                self._page_down_signal.emit()
             elif key == keyboard.Key.esc:
                 self._esc_signal.emit()
             elif key == keyboard.Key.end:
@@ -48,6 +53,10 @@ class KeyboardListener(QObject):
     @pyqtSlot()
     def _dispatch_page_up(self):
         self._run_callbacks('page_up')
+    
+    @pyqtSlot()
+    def _dispatch_page_down(self):
+        self._run_callbacks('page_down')
     
     @pyqtSlot()
     def _dispatch_esc(self):

@@ -5,7 +5,8 @@ from typing import Callable, List, Tuple, Optional
 import os
 import time
 import re
-from PyQt6.QtWidgets import QMessageBox
+from PyQt6.QtWidgets import QMessageBox, QInputDialog, QDialog
+from PyQt6.QtGui import QCursor
 from src.keyboard_listener import KeyboardListener
 from src.image_matcher import ImageMatcher
 from src.window_picker import WindowPickerDialog, Window
@@ -60,6 +61,7 @@ class ImageRecordingManager:
         # Register keyboard callbacks
         self.keyboard_listener.register_callback('esc', self._on_esc)
         self.keyboard_listener.register_callback('page_up', self._on_page_up)
+        self.keyboard_listener.register_callback('page_down', self._on_page_down)
         self.keyboard_listener.start()
         
         # Use pre-selected target if provided, otherwise ask user.
@@ -161,6 +163,7 @@ class ImageRecordingManager:
                     "click_y": None,
                     "click_client_x": None,
                     "click_client_y": None,
+                    "mouse_button": "left",
                     "target_hwnd": int(self.target_window.hwnd) if self.target_window else None,
                     "target_title": self.target_window.title if self.target_window else ""
                 }
@@ -224,6 +227,41 @@ class ImageRecordingManager:
     
     def _on_page_up(self):
         """Handle PAGE UP key press"""
+        self._record_waiting_click_position("left")
+    
+    def _on_page_down(self):
+        """Handle PAGE DOWN key press for custom image-click action"""
+        if not self.is_recording:
+            return
+        
+        mouse_button = self._choose_click_action()
+        if not mouse_button:
+            return
+        self._record_waiting_click_position(mouse_button)
+    
+    def _choose_click_action(self):
+        """Choose click action for current click-position recording."""
+        options = ["Right Click"]
+        dialog = QInputDialog(self.parent)
+        dialog.setWindowTitle("Choose Action")
+        dialog.setLabelText("Select action for this click position:")
+        dialog.setComboBoxItems(options)
+        dialog.setTextValue(options[0])
+        dialog.setOkButtonText("OK")
+        dialog.setCancelButtonText("Cancel")
+        
+        pos = QCursor.pos()
+        dialog.move(pos.x() + 12, pos.y() + 12)
+        
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        choice = dialog.textValue()
+        if choice == "Right Click":
+            return "right"
+        return "left"
+    
+    def _record_waiting_click_position(self, mouse_button: str):
+        """Record click position while waiting for click dialog."""
         if not self.is_recording:
             return
         
@@ -253,6 +291,7 @@ class ImageRecordingManager:
                 "click_y": int(y),
                 "click_client_x": click_client_x,
                 "click_client_y": click_client_y,
+                "mouse_button": mouse_button if mouse_button in ("left", "right") else "left",
                 "target_hwnd": target_hwnd,
                 "target_title": target_title
             }
@@ -265,7 +304,7 @@ class ImageRecordingManager:
             if self.image_dialogs:
                 last_dialog = self.image_dialogs[-1]
                 if isinstance(last_dialog, ClickPositionDialog):
-                    last_dialog.update_position(int(x), int(y))
+                    last_dialog.update_position(int(x), int(y), mouse_button=mouse_button)
                     last_dialog.close()
             
             # Immediately persist each captured item through callback.
@@ -290,6 +329,7 @@ class ImageRecordingManager:
         # Unregister callbacks
         self.keyboard_listener.unregister_callback('esc', self._on_esc)
         self.keyboard_listener.unregister_callback('page_up', self._on_page_up)
+        self.keyboard_listener.unregister_callback('page_down', self._on_page_down)
         self.keyboard_listener.stop()
         
         # Close dialogs
@@ -311,6 +351,7 @@ class ImageRecordingManager:
         # Cleanup
         self.keyboard_listener.unregister_callback('esc', self._on_esc)
         self.keyboard_listener.unregister_callback('page_up', self._on_page_up)
+        self.keyboard_listener.unregister_callback('page_down', self._on_page_down)
         self.keyboard_listener.stop()
         
         for dialog in self.image_dialogs:

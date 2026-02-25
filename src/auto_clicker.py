@@ -169,6 +169,7 @@ class AutoClicker:
         """Execute position-based click"""
         x = action.data.get('x', 0)
         y = action.data.get('y', 0)
+        mouse_button = str(action.data.get('mouse_button', 'left')).lower()
         client_x = action.data.get('client_x')
         client_y = action.data.get('client_y')
         target_hwnd = action.data.get('target_hwnd')
@@ -179,12 +180,14 @@ class AutoClicker:
                 return
             if client_x is None or client_y is None:
                 client_x, client_y = win32gui.ScreenToClient(int(target_hwnd), (int(x), int(y)))
-            self._post_click_client(int(target_hwnd), int(client_x), int(client_y))
-            self._notify_status(f"Clicked target hwnd={target_hwnd} at client ({int(client_x)}, {int(client_y)})")
+            self._post_click_client(int(target_hwnd), int(client_x), int(client_y), mouse_button)
+            self._notify_status(
+                f"Clicked {mouse_button} target hwnd={target_hwnd} at client ({int(client_x)}, {int(client_y)})"
+            )
             return
         
-        pyautogui.click(int(x), int(y))
-        self._notify_status(f"Clicked at ({int(x)}, {int(y)})")
+        pyautogui.click(int(x), int(y), button='right' if mouse_button == 'right' else 'left')
+        self._notify_status(f"Clicked {mouse_button} at ({int(x)}, {int(y)})")
     
     def _execute_image_click(self, action: ClickAction):
         """Execute image-based click"""
@@ -193,6 +196,7 @@ class AutoClicker:
         offset_y = action.data.get('offset_y', 0)
         click_x = action.data.get('click_x')
         click_y = action.data.get('click_y')
+        mouse_button = str(action.data.get('mouse_button', 'left')).lower()
         click_client_x = action.data.get('click_client_x')
         click_client_y = action.data.get('click_client_y')
         target_hwnd = action.data.get('target_hwnd')
@@ -219,36 +223,36 @@ class AutoClicker:
                     if click_client_x is not None and click_client_y is not None:
                         cx = int(click_client_x)
                         cy = int(click_client_y)
-                        self._post_click_client(target_hwnd, cx, cy)
+                        self._post_click_client(target_hwnd, cx, cy, mouse_button)
                         self._notify_status(
-                            f"Image found in target: {os.path.basename(image_path)} -> clicked target client ({cx}, {cy})"
+                            f"Image found in target: {os.path.basename(image_path)} -> {mouse_button} click at ({cx}, {cy})"
                         )
                     elif click_x is not None and click_y is not None:
                         cx, cy = win32gui.ScreenToClient(target_hwnd, (int(click_x), int(click_y)))
-                        self._post_click_client(target_hwnd, int(cx), int(cy))
+                        self._post_click_client(target_hwnd, int(cx), int(cy), mouse_button)
                         self._notify_status(
-                            f"Image found in target: {os.path.basename(image_path)} -> clicked target client ({int(cx)}, {int(cy)})"
+                            f"Image found in target: {os.path.basename(image_path)} -> {mouse_button} click at ({int(cx)}, {int(cy)})"
                         )
                     else:
                         mx, my = match_pos
                         cx, cy = win32gui.ScreenToClient(target_hwnd, (int(mx), int(my)))
-                        self._post_click_client(target_hwnd, int(cx), int(cy))
+                        self._post_click_client(target_hwnd, int(cx), int(cy), mouse_button)
                         self._notify_status(
-                            f"Image found in target: {os.path.basename(image_path)} -> clicked matched position in target"
+                            f"Image found in target: {os.path.basename(image_path)} -> {mouse_button} click at matched position"
                         )
                 elif click_x is not None and click_y is not None:
-                    pyautogui.click(int(click_x), int(click_y))
+                    pyautogui.click(int(click_x), int(click_y), button='right' if mouse_button == 'right' else 'left')
                     self._notify_status(
-                        f"Image found: {os.path.basename(image_path)} -> clicked recorded position ({int(click_x)}, {int(click_y)})"
+                        f"Image found: {os.path.basename(image_path)} -> {mouse_button} click at ({int(click_x)}, {int(click_y)})"
                     )
                 else:
                     # Backward compatibility for old scripts without click_x/click_y.
                     x, y = match_pos
                     x += offset_x
                     y += offset_y
-                    pyautogui.click(x, y)
+                    pyautogui.click(x, y, button='right' if mouse_button == 'right' else 'left')
                     self._notify_status(
-                        f"Image found: {os.path.basename(image_path)} -> clicked image position ({x}, {y})"
+                        f"Image found: {os.path.basename(image_path)} -> {mouse_button} click at image position ({x}, {y})"
                     )
             else:
                 self._notify_status(f"Image not found: {os.path.basename(image_path)}")
@@ -258,6 +262,7 @@ class AutoClicker:
     def _execute_image_direct_click(self, action: ClickAction):
         """Execute direct-image click: click matched image center when detected."""
         image_path = action.data.get('image_path', '')
+        mouse_button = str(action.data.get('mouse_button', 'left')).lower()
         target_hwnd = action.data.get('target_hwnd')
         target_title = action.data.get('target_title', '')
         
@@ -284,14 +289,14 @@ class AutoClicker:
         mx, my = int(match_pos[0]), int(match_pos[1])
         if target_hwnd is not None:
             cx, cy = win32gui.ScreenToClient(target_hwnd, (mx, my))
-            self._post_click_client(target_hwnd, int(cx), int(cy))
+            self._post_click_client(target_hwnd, int(cx), int(cy), mouse_button)
             self._notify_status(
-                f"Image direct click: {os.path.basename(image_path)} -> target client ({int(cx)}, {int(cy)})"
+                f"Image direct {mouse_button} click: {os.path.basename(image_path)} -> target client ({int(cx)}, {int(cy)})"
             )
         else:
-            pyautogui.click(mx, my)
+            pyautogui.click(mx, my, button='right' if mouse_button == 'right' else 'left')
             self._notify_status(
-                f"Image direct click: {os.path.basename(image_path)} -> screen ({mx}, {my})"
+                f"Image direct {mouse_button} click: {os.path.basename(image_path)} -> screen ({mx}, {my})"
             )
     
     def _validate_target_window(self, hwnd: int):
@@ -304,13 +309,23 @@ class AutoClicker:
             return False, "Target window is hidden."
         return True, ""
     
-    def _post_click_client(self, hwnd: int, client_x: int, client_y: int):
-        """Post left click messages to the most relevant child window at point."""
+    def _post_click_client(self, hwnd: int, client_x: int, client_y: int, mouse_button: str = "left"):
+        """Post mouse click messages to the most relevant child window at point."""
+        screen_x, screen_y = win32gui.ClientToScreen(hwnd, (int(client_x), int(client_y)))
         click_hwnd, lx, ly = self._resolve_click_target(hwnd, int(client_x), int(client_y))
         lparam = win32api.MAKELONG(int(lx), int(ly))
         win32gui.PostMessage(click_hwnd, win32con.WM_MOUSEMOVE, 0, lparam)
-        win32gui.PostMessage(click_hwnd, win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON, lparam)
-        win32gui.PostMessage(click_hwnd, win32con.WM_LBUTTONUP, 0, lparam)
+        if str(mouse_button).lower() == "right":
+            win32gui.PostMessage(click_hwnd, win32con.WM_RBUTTONDOWN, win32con.MK_RBUTTON, lparam)
+            win32gui.PostMessage(click_hwnd, win32con.WM_RBUTTONUP, 0, lparam)
+            # Some apps only react to right-click when WM_CONTEXTMENU is posted.
+            context_lparam = win32api.MAKELONG(int(screen_x), int(screen_y))
+            win32gui.PostMessage(click_hwnd, win32con.WM_CONTEXTMENU, click_hwnd, context_lparam)
+            if click_hwnd != hwnd:
+                win32gui.PostMessage(hwnd, win32con.WM_CONTEXTMENU, click_hwnd, context_lparam)
+        else:
+            win32gui.PostMessage(click_hwnd, win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON, lparam)
+            win32gui.PostMessage(click_hwnd, win32con.WM_LBUTTONUP, 0, lparam)
     
     def _resolve_click_target(self, hwnd: int, client_x: int, client_y: int):
         """
