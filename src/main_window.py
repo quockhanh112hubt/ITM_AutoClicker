@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QTableWidget, QTableWidgetItem, QTabWidget,
     QLabel, QSpinBox, QFileDialog, QMessageBox, QDialog,
     QDialogButtonBox, QRadioButton, QButtonGroup, QStatusBar,
-    QInputDialog
+    QComboBox
 )
 from PyQt6.QtCore import Qt, QTimer, QSize, pyqtSignal
 from PyQt6.QtGui import QFont, QColor, QPixmap
@@ -315,11 +315,6 @@ class MainWindow(QMainWindow):
         btn_remove.clicked.connect(self.on_remove_action)
         button_layout.addWidget(btn_remove)
         
-        # Priority button (IMAGE actions)
-        btn_priority = QPushButton("Set Priority")
-        btn_priority.clicked.connect(self.on_set_priority)
-        button_layout.addWidget(btn_priority)
-        
         # Clear button
         btn_clear = QPushButton("Clear All")
         btn_clear.clicked.connect(self.on_clear_all)
@@ -446,14 +441,13 @@ class MainWindow(QMainWindow):
                 
                 # Priority
                 if action.type in (ClickType.IMAGE, ClickType.IMAGE_DIRECT):
-                    priority_level = int(action.data.get('priority_level', 0) or 0)
-                    priority_text = f"P{priority_level}" if priority_level > 0 else "-"
+                    priority_combo = self._create_priority_combo(i, action)
+                    self.action_table.setCellWidget(i, 3, priority_combo)
                 else:
-                    priority_text = "-"
-                item_priority = QTableWidgetItem(priority_text)
-                item_priority.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                item_priority.setFlags(item_priority.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                self.action_table.setItem(i, 3, item_priority)
+                    item_priority = QTableWidgetItem("-")
+                    item_priority.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    item_priority.setFlags(item_priority.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                    self.action_table.setItem(i, 3, item_priority)
                 
                 # Delay (editable)
                 delay_ms = int(action.data.get('delay_ms', self.config.get("click_delay_ms", 100)) or 0)
@@ -681,40 +675,63 @@ class MainWindow(QMainWindow):
             self.update_table()
             self.statusBar.showMessage("Action removed")
     
-    def on_set_priority(self):
-        """Set priority for selected image action"""
-        row = self.action_table.currentRow()
-        if row < 0:
-            self.statusBar.showMessage("Select an action row first")
+    def _create_priority_combo(self, row: int, action: ClickAction) -> QComboBox:
+        """Create priority combo for image action rows."""
+        combo = QComboBox()
+        combo.setEditable(True)
+        combo.addItem("-")
+        for level in range(1, 11):
+            combo.addItem(f"P{level}")
+        
+        priority_level = int(action.data.get("priority_level", 0) or 0)
+        if priority_level <= 0:
+            combo.setCurrentText("-")
+        elif priority_level <= 10:
+            combo.setCurrentText(f"P{priority_level}")
+        else:
+            combo.addItem(f"P{priority_level}")
+            combo.setCurrentText(f"P{priority_level}")
+        
+        combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        combo.currentTextChanged.connect(lambda text, r=row: self._on_priority_combo_changed(r, text))
+        return combo
+    
+    def _on_priority_combo_changed(self, row: int, text: str):
+        """Handle priority combo changes from table."""
+        if self._updating_table:
             return
         
         actions = self.current_script.get_actions()
-        if row >= len(actions):
-            self.statusBar.showMessage("Invalid selected row")
+        if row < 0 or row >= len(actions):
             return
         
         action = actions[row]
         if action.type not in (ClickType.IMAGE, ClickType.IMAGE_DIRECT):
-            QMessageBox.information(self, "Set Priority", "Priority is available only for image actions.")
             return
         
-        current_level = int(action.data.get("priority_level", 0) or 0)
-        value, ok = QInputDialog.getInt(
-            self,
-            "Set Priority Level",
-            "Priority level (0 = disabled, 1 = highest):",
-            current_level,
-            0,
-            999,
-            1
-        )
-        if not ok:
-            return
+        raw = (text or "").strip().upper()
+        if raw in ("", "-", "0", "P0"):
+            level = 0
+        else:
+            if raw.startswith("P"):
+                raw = raw[1:]
+            if not raw.isdigit():
+                self.statusBar.showMessage("Priority must be '-' or a positive number (example: P1)")
+                self._updating_table = True
+                try:
+                    current = int(action.data.get("priority_level", 0) or 0)
+                    combo = self.action_table.cellWidget(row, 3)
+                    if isinstance(combo, QComboBox):
+                        combo.setCurrentText("-" if current <= 0 else f"P{current}")
+                finally:
+                    self._updating_table = False
+                return
+            level = int(raw)
         
-        action.data["priority_level"] = int(value)
+        action.data["priority_level"] = max(0, level)
         self.update_table()
-        if value > 0:
-            self.statusBar.showMessage(f"Row {row + 1} set to priority P{value}")
+        if level > 0:
+            self.statusBar.showMessage(f"Row {row + 1} priority set to P{level}")
         else:
             self.statusBar.showMessage(f"Priority disabled for row {row + 1}")
     
