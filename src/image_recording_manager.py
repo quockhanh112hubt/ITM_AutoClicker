@@ -301,3 +301,8 @@ class ImageRecordingManager:
         # Call cancel callback
         if self.on_cancel:
             self.on_cancel()
+    
+    def finish(self):
+        """Finish recording gracefully (ESC-like behavior)."""
+        if self.is_recording:
+            self._finish_recording(cancelled=False)

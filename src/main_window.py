@@ -669,6 +669,8 @@ class MainWindow(QMainWindow):
         if self.auto_clicker.is_running:
             self.on_stop()
         else:
+            if self._is_recording_active():
+                self._finish_recording_for_quick_start()
             self.on_start()
     
     def on_delay_changed(self, value: int):
@@ -684,6 +686,26 @@ class MainWindow(QMainWindow):
     def on_status_changed(self, message: str):
         """Handle status changed"""
         self.statusBar.showMessage(message)
+    
+    def _is_recording_active(self) -> bool:
+        """Check whether any recording mode is active."""
+        if self.position_recorder and self.position_recorder.is_recording:
+            return True
+        if self.image_recording_manager and self.image_recording_manager.is_recording:
+            return True
+        return False
+    
+    def _finish_recording_for_quick_start(self):
+        """Finalize current recording before quick-start with END."""
+        # Position recording: stop and persist recorded points.
+        if self.position_recorder and self.position_recorder.is_recording:
+            positions = list(self.position_recorder.positions)
+            self.position_recorder.stop()
+            self.on_position_recording_cancelled(positions)
+        
+        # Image recording: finish gracefully (equivalent to ESC flow).
+        if self.image_recording_manager and self.image_recording_manager.is_recording:
+            self.image_recording_manager.finish()
     
     def on_select_target_window(self):
         """Select a global target window for recording and execution"""
