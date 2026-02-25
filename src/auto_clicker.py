@@ -92,6 +92,8 @@ class AutoClicker:
                     self._execute_position_click(action)
                 elif action.type == ClickType.IMAGE:
                     self._execute_image_click(action)
+                elif action.type == ClickType.IMAGE_DIRECT:
+                    self._execute_image_direct_click(action)
                 
                 if not self.is_running:
                     break
@@ -110,7 +112,7 @@ class AutoClicker:
         
         candidates = []
         for idx, action in enumerate(self.current_script.get_actions()):
-            if action.type != ClickType.IMAGE:
+            if action.type not in (ClickType.IMAGE, ClickType.IMAGE_DIRECT):
                 continue
             level = int(action.data.get('priority_level', 0) or 0)
             if level > 0:
@@ -133,7 +135,10 @@ class AutoClicker:
                 continue
             
             if self._is_image_action_triggered(action):
-                self._execute_image_click(action)
+                if action.type == ClickType.IMAGE_DIRECT:
+                    self._execute_image_direct_click(action)
+                else:
+                    self._execute_image_click(action)
                 self._priority_last_trigger_at[idx] = time.time()
                 clicked_count += 1
                 time.sleep(self.delay_ms / 1000.0)
@@ -249,6 +254,45 @@ class AutoClicker:
                 self._notify_status(f"Image not found: {os.path.basename(image_path)}")
         else:
             self._notify_status(f"Image file not found: {image_path}")
+    
+    def _execute_image_direct_click(self, action: ClickAction):
+        """Execute direct-image click: click matched image center when detected."""
+        image_path = action.data.get('image_path', '')
+        target_hwnd = action.data.get('target_hwnd')
+        target_title = action.data.get('target_title', '')
+        
+        if target_hwnd is not None:
+            target_hwnd = int(target_hwnd)
+            ok, error = self._validate_target_window(target_hwnd)
+            if not ok:
+                self._stop_due_to_target_error(error, target_title)
+                return
+        
+        if not os.path.exists(image_path):
+            self._notify_status(f"Image file not found: {image_path}")
+            return
+        
+        if target_hwnd is not None:
+            match_pos = self.image_matcher.find_image_in_window(image_path, target_hwnd)
+        else:
+            match_pos = self.image_matcher.find_image(image_path)
+        
+        if not match_pos:
+            self._notify_status(f"Image not found: {os.path.basename(image_path)}")
+            return
+        
+        mx, my = int(match_pos[0]), int(match_pos[1])
+        if target_hwnd is not None:
+            cx, cy = win32gui.ScreenToClient(target_hwnd, (mx, my))
+            self._post_click_client(target_hwnd, int(cx), int(cy))
+            self._notify_status(
+                f"Image direct click: {os.path.basename(image_path)} -> target client ({int(cx)}, {int(cy)})"
+            )
+        else:
+            pyautogui.click(mx, my)
+            self._notify_status(
+                f"Image direct click: {os.path.basename(image_path)} -> screen ({mx}, {my})"
+            )
     
     def _validate_target_window(self, hwnd: int):
         """Validate target window state before background click."""

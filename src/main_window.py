@@ -43,14 +43,17 @@ class SettingsDialog(QDialog):
         self.button_group = QButtonGroup()
         self.radio_position = QRadioButton("Position Based Click")
         self.radio_image = QRadioButton("Image Based Click")
+        self.radio_image_direct = QRadioButton("Image Direct Click (click on matched image)")
         
         self.radio_position.setChecked(True)
         
         self.button_group.addButton(self.radio_position, 0)
         self.button_group.addButton(self.radio_image, 1)
+        self.button_group.addButton(self.radio_image_direct, 2)
         
         layout.addWidget(self.radio_position)
         layout.addWidget(self.radio_image)
+        layout.addWidget(self.radio_image_direct)
         
         # Buttons
         button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
@@ -64,6 +67,8 @@ class SettingsDialog(QDialog):
         """Get selected click type"""
         if self.radio_position.isChecked():
             return ClickType.POSITION
+        elif self.radio_image_direct.isChecked():
+            return ClickType.IMAGE_DIRECT
         else:
             return ClickType.IMAGE
 
@@ -183,6 +188,7 @@ class MainWindow(QMainWindow):
         self.position_recorder = None
         self.image_recorder = None
         self.image_recording_manager = None
+        self.pending_image_action_type = ClickType.IMAGE
         self.selected_target_window: Window | None = None
         self.target_info_label = None
         
@@ -378,7 +384,7 @@ class MainWindow(QMainWindow):
             # Image preview
             preview_label = QLabel("-")
             preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            if action.type == ClickType.IMAGE:
+            if action.type in (ClickType.IMAGE, ClickType.IMAGE_DIRECT):
                 image_path = action.data.get('image_path', '')
                 if image_path and os.path.exists(image_path):
                     pixmap = QPixmap(image_path)
@@ -395,7 +401,7 @@ class MainWindow(QMainWindow):
             self.action_table.setCellWidget(i, 2, preview_label)
             
             # Priority
-            if action.type == ClickType.IMAGE:
+            if action.type in (ClickType.IMAGE, ClickType.IMAGE_DIRECT):
                 priority_level = int(action.data.get('priority_level', 0) or 0)
                 priority_text = f"P{priority_level}" if priority_level > 0 else "-"
             else:
@@ -412,7 +418,7 @@ class MainWindow(QMainWindow):
                 target_title = action.data.get('target_title', '')
                 target_part = f" | Target: {target_title}" if target_title else ""
                 details = f"Position: ({x}, {y}){target_part}"
-            else:
+            elif action.type == ClickType.IMAGE:
                 image_path = action.data.get('image_path', '')
                 offset_x = action.data.get('offset_x', 0)
                 offset_y = action.data.get('offset_y', 0)
@@ -424,6 +430,13 @@ class MainWindow(QMainWindow):
                     f"Image: {os.path.basename(image_path)} | Offset: ({offset_x}, {offset_y})"
                     f"{priority_part}{target_part}"
                 )
+            else:
+                image_path = action.data.get('image_path', '')
+                priority_level = int(action.data.get('priority_level', 0) or 0)
+                priority_part = f" | Priority: P{priority_level}" if priority_level > 0 else ""
+                target_title = action.data.get('target_title', '')
+                target_part = f" | Target: {target_title}" if target_title else ""
+                details = f"Image Direct: {os.path.basename(image_path)}{priority_part}{target_part}"
             
             item_details = QTableWidgetItem(details)
             item_details.setFlags(item_details.flags() & ~Qt.ItemFlag.ItemIsEditable)
@@ -441,7 +454,7 @@ class MainWindow(QMainWindow):
             if click_type == ClickType.POSITION:
                 self.start_position_recording()
             else:
-                self.start_image_recording()
+                self.start_image_recording(click_type)
     
     def start_position_recording(self):
         """Start recording positions"""
@@ -501,25 +514,33 @@ class MainWindow(QMainWindow):
         else:
             self.statusBar.showMessage("No positions recorded")
     
-    def start_image_recording(self):
+    def start_image_recording(self, image_click_type: ClickType = ClickType.IMAGE):
         """Start recording images using the new manager"""
         if not self.selected_target_window:
             self.statusBar.showMessage("Image recording cancelled (no target window selected)")
             return
 
+        self.pending_image_action_type = image_click_type
+        require_click_position = image_click_type == ClickType.IMAGE
+        
         self.image_recording_manager = ImageRecordingManager(
             on_complete=self.on_image_recording_complete,
             on_cancel=self.on_image_recording_cancelled,
             on_image_recorded=self.on_image_recorded,
             parent=self
         )
-        self.image_recording_manager.start(target_window=self.selected_target_window)
-        self.statusBar.showMessage(f"Image recording started. Target: {self.selected_target_window.title}")
+        self.image_recording_manager.start(
+            target_window=self.selected_target_window,
+            require_click_position=require_click_position
+        )
+        mode = "Image Based" if require_click_position else "Image Direct"
+        self.statusBar.showMessage(f"{mode} recording started. Target: {self.selected_target_window.title}")
     
     def on_image_recorded(self, recorded: dict, total_count: int):
         """Handle one image+click position recorded and persist it immediately"""
+        is_direct = self.pending_image_action_type == ClickType.IMAGE_DIRECT
         action = ClickAction(
-            ClickType.IMAGE,
+            self.pending_image_action_type,
             image_path=recorded.get("image_path", ""),
             offset_x=0,
             offset_y=0,
@@ -529,7 +550,7 @@ class MainWindow(QMainWindow):
             click_client_y=recorded.get("click_client_y"),
             target_hwnd=recorded.get("target_hwnd"),
             target_title=recorded.get("target_title", ""),
-            priority_level=0
+            priority_level=1 if is_direct else 0
         )
         self.current_script.add_action(action)
         self.update_table()
@@ -559,7 +580,7 @@ class MainWindow(QMainWindow):
             self.statusBar.showMessage("Action removed")
     
     def on_set_priority(self):
-        """Set priority for selected IMAGE action"""
+        """Set priority for selected image action"""
         row = self.action_table.currentRow()
         if row < 0:
             self.statusBar.showMessage("Select an action row first")
@@ -571,8 +592,8 @@ class MainWindow(QMainWindow):
             return
         
         action = actions[row]
-        if action.type != ClickType.IMAGE:
-            QMessageBox.information(self, "Set Priority", "Priority is available only for IMAGE actions.")
+        if action.type not in (ClickType.IMAGE, ClickType.IMAGE_DIRECT):
+            QMessageBox.information(self, "Set Priority", "Priority is available only for image actions.")
             return
         
         current_level = int(action.data.get("priority_level", 0) or 0)
@@ -773,7 +794,7 @@ class MainWindow(QMainWindow):
                         action.data["client_y"] = int(cy)
                     except Exception:
                         pass
-            elif action.type == ClickType.IMAGE:
+            elif action.type in (ClickType.IMAGE, ClickType.IMAGE_DIRECT):
                 # Keep recorded client coordinates if available to avoid drift.
                 click_client_x = action.data.get("click_client_x")
                 click_client_y = action.data.get("click_client_y")

@@ -13,7 +13,8 @@ from enum import Enum
 class ClickType(Enum):
     """Types of click actions"""
     POSITION = "position"  # Click at specific coordinates
-    IMAGE = "image"        # Click when image is found
+    IMAGE = "image"        # Click at recorded point when image is found
+    IMAGE_DIRECT = "image_direct"  # Click directly on matched image
 
 
 class ClickAction:

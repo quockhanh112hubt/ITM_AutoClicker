@@ -47,13 +47,15 @@ class ImageRecordingManager:
         self.region_selector: Optional[WindowRegionSelector] = None
         self.image_dialogs = []
         self.target_window: Optional[Window] = None
+        self.require_click_position = True
         
-    def start(self, target_window: Optional[Window] = None):
+    def start(self, target_window: Optional[Window] = None, require_click_position: bool = True):
         """Start image recording process"""
         self.is_recording = True
         self.recorded_images.clear()
         self.current_image_num = self._get_last_image_index()
         self.target_window = target_window
+        self.require_click_position = require_click_position
         
         # Register keyboard callbacks
         self.keyboard_listener.register_callback('esc', self._on_esc)
@@ -148,8 +150,28 @@ class ImageRecordingManager:
                 dialog.close()
             except:
                 pass
-            # Proceed to ask for click position
-            self._show_click_position_dialog(image_path)
+            if self.require_click_position:
+                # Proceed to ask for click position
+                self._show_click_position_dialog(image_path)
+            else:
+                # Record image-only action (direct click on matched image).
+                recorded = {
+                    "image_path": image_path,
+                    "click_x": None,
+                    "click_y": None,
+                    "click_client_x": None,
+                    "click_client_y": None,
+                    "target_hwnd": int(self.target_window.hwnd) if self.target_window else None,
+                    "target_title": self.target_window.title if self.target_window else ""
+                }
+                self.recorded_images.append(recorded)
+                current_count = len(self.recorded_images)
+                if self.on_image_recorded:
+                    try:
+                        self.on_image_recorded(recorded, current_count)
+                    except Exception as e:
+                        print(f"[WARN] on_image_recorded callback failed: {e}")
+                self._start_next_image()
 
         def on_rejected():
             try:
