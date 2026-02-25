@@ -5,13 +5,13 @@ from typing import Callable, List, Tuple, Optional
 import os
 import time
 import re
-from PyQt6.QtWidgets import QMessageBox, QInputDialog, QDialog
-from PyQt6.QtGui import QCursor
+from PyQt6.QtWidgets import QMessageBox
 from src.keyboard_listener import KeyboardListener
 from src.image_matcher import ImageMatcher
 from src.window_picker import WindowPickerDialog, Window
 from src.window_region_selector import WindowRegionSelector
 from src.image_dialogs import ImageConfirmationDialog, ClickPositionDialog
+from src.action_options import choose_advanced_action
 from pynput import mouse
 from PIL import Image
 import win32gui
@@ -163,6 +163,7 @@ class ImageRecordingManager:
                     "click_y": None,
                     "click_client_x": None,
                     "click_client_y": None,
+                    "action_mode": "mouse_click",
                     "mouse_button": "left",
                     "target_hwnd": int(self.target_window.hwnd) if self.target_window else None,
                     "target_title": self.target_window.title if self.target_window else ""
@@ -227,40 +228,23 @@ class ImageRecordingManager:
     
     def _on_page_up(self):
         """Handle PAGE UP key press"""
-        self._record_waiting_click_position("left")
+        self._record_waiting_click_position({"action_mode": "mouse_click", "mouse_button": "left"})
     
     def _on_page_down(self):
         """Handle PAGE DOWN key press for custom image-click action"""
         if not self.is_recording:
             return
         
-        mouse_button = self._choose_click_action()
-        if not mouse_button:
+        action_data = self._choose_click_action()
+        if not action_data:
             return
-        self._record_waiting_click_position(mouse_button)
+        self._record_waiting_click_position(action_data)
     
     def _choose_click_action(self):
         """Choose click action for current click-position recording."""
-        options = ["Right Click"]
-        dialog = QInputDialog(self.parent)
-        dialog.setWindowTitle("Choose Action")
-        dialog.setLabelText("Select action for this click position:")
-        dialog.setComboBoxItems(options)
-        dialog.setTextValue(options[0])
-        dialog.setOkButtonText("OK")
-        dialog.setCancelButtonText("Cancel")
-        
-        pos = QCursor.pos()
-        dialog.move(pos.x() + 12, pos.y() + 12)
-        
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return None
-        choice = dialog.textValue()
-        if choice == "Right Click":
-            return "right"
-        return "left"
+        return choose_advanced_action(self.parent)
     
-    def _record_waiting_click_position(self, mouse_button: str):
+    def _record_waiting_click_position(self, action_data: dict):
         """Record click position while waiting for click dialog."""
         if not self.is_recording:
             return
@@ -291,7 +275,11 @@ class ImageRecordingManager:
                 "click_y": int(y),
                 "click_client_x": click_client_x,
                 "click_client_y": click_client_y,
-                "mouse_button": mouse_button if mouse_button in ("left", "right") else "left",
+                "action_mode": str(action_data.get("action_mode", "mouse_click")).lower(),
+                "mouse_button": str(action_data.get("mouse_button", "left")).lower(),
+                "hold_ms": action_data.get("hold_ms"),
+                "key_name": action_data.get("key_name"),
+                "hotkey_keys": action_data.get("hotkey_keys"),
                 "target_hwnd": target_hwnd,
                 "target_title": target_title
             }
@@ -304,7 +292,7 @@ class ImageRecordingManager:
             if self.image_dialogs:
                 last_dialog = self.image_dialogs[-1]
                 if isinstance(last_dialog, ClickPositionDialog):
-                    last_dialog.update_position(int(x), int(y), mouse_button=mouse_button)
+                    last_dialog.update_position(int(x), int(y), mouse_button=recorded.get("mouse_button", "left"))
                     last_dialog.close()
             
             # Immediately persist each captured item through callback.

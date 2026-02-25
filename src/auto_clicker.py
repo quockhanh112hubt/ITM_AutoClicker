@@ -169,10 +169,17 @@ class AutoClicker:
         """Execute position-based click"""
         x = action.data.get('x', 0)
         y = action.data.get('y', 0)
+        action_mode = str(action.data.get('action_mode', 'mouse_click')).lower()
         mouse_button = str(action.data.get('mouse_button', 'left')).lower()
+        hold_ms = int(action.data.get('hold_ms', 1000) or 1000)
         client_x = action.data.get('client_x')
         client_y = action.data.get('client_y')
         target_hwnd = action.data.get('target_hwnd')
+
+        if action_mode in ("key_press", "hotkey", "key_hold", "key_hold_true"):
+            self._execute_key_action(action, int(target_hwnd) if target_hwnd else None)
+            return
+
         if target_hwnd:
             ok, error = self._validate_target_window(int(target_hwnd))
             if not ok:
@@ -180,23 +187,25 @@ class AutoClicker:
                 return
             if client_x is None or client_y is None:
                 client_x, client_y = win32gui.ScreenToClient(int(target_hwnd), (int(x), int(y)))
-            self._post_click_client(int(target_hwnd), int(client_x), int(client_y), mouse_button)
+            self._post_click_client(int(target_hwnd), int(client_x), int(client_y), mouse_button, action_mode, hold_ms)
             self._notify_status(
-                f"Clicked {mouse_button} target hwnd={target_hwnd} at client ({int(client_x)}, {int(client_y)})"
+                f"Executed {action_mode} on target hwnd={target_hwnd} at client ({int(client_x)}, {int(client_y)})"
             )
             return
         
-        pyautogui.click(int(x), int(y), button='right' if mouse_button == 'right' else 'left')
-        self._notify_status(f"Clicked {mouse_button} at ({int(x)}, {int(y)})")
+        self._perform_foreground_mouse_action(int(x), int(y), mouse_button, action_mode, hold_ms)
+        self._notify_status(f"Executed {action_mode} at ({int(x)}, {int(y)})")
     
     def _execute_image_click(self, action: ClickAction):
         """Execute image-based click"""
         image_path = action.data.get('image_path', '')
         offset_x = action.data.get('offset_x', 0)
         offset_y = action.data.get('offset_y', 0)
+        action_mode = str(action.data.get('action_mode', 'mouse_click')).lower()
         click_x = action.data.get('click_x')
         click_y = action.data.get('click_y')
         mouse_button = str(action.data.get('mouse_button', 'left')).lower()
+        hold_ms = int(action.data.get('hold_ms', 1000) or 1000)
         click_client_x = action.data.get('click_client_x')
         click_client_y = action.data.get('click_client_y')
         target_hwnd = action.data.get('target_hwnd')
@@ -219,40 +228,44 @@ class AutoClicker:
             if match_pos:
                 # Preferred behavior: image is a trigger condition,
                 # click at recorded absolute position from PAGE UP.
+                if action_mode in ("key_press", "hotkey", "key_hold", "key_hold_true"):
+                    self._execute_key_action(action, target_hwnd)
+                    return
+
                 if target_hwnd is not None:
                     if click_client_x is not None and click_client_y is not None:
                         cx = int(click_client_x)
                         cy = int(click_client_y)
-                        self._post_click_client(target_hwnd, cx, cy, mouse_button)
+                        self._post_click_client(target_hwnd, cx, cy, mouse_button, action_mode, hold_ms)
                         self._notify_status(
-                            f"Image found in target: {os.path.basename(image_path)} -> {mouse_button} click at ({cx}, {cy})"
+                            f"Image found in target: {os.path.basename(image_path)} -> {action_mode} at ({cx}, {cy})"
                         )
                     elif click_x is not None and click_y is not None:
                         cx, cy = win32gui.ScreenToClient(target_hwnd, (int(click_x), int(click_y)))
-                        self._post_click_client(target_hwnd, int(cx), int(cy), mouse_button)
+                        self._post_click_client(target_hwnd, int(cx), int(cy), mouse_button, action_mode, hold_ms)
                         self._notify_status(
-                            f"Image found in target: {os.path.basename(image_path)} -> {mouse_button} click at ({int(cx)}, {int(cy)})"
+                            f"Image found in target: {os.path.basename(image_path)} -> {action_mode} at ({int(cx)}, {int(cy)})"
                         )
                     else:
                         mx, my = match_pos
                         cx, cy = win32gui.ScreenToClient(target_hwnd, (int(mx), int(my)))
-                        self._post_click_client(target_hwnd, int(cx), int(cy), mouse_button)
+                        self._post_click_client(target_hwnd, int(cx), int(cy), mouse_button, action_mode, hold_ms)
                         self._notify_status(
-                            f"Image found in target: {os.path.basename(image_path)} -> {mouse_button} click at matched position"
+                            f"Image found in target: {os.path.basename(image_path)} -> {action_mode} at matched position"
                         )
                 elif click_x is not None and click_y is not None:
-                    pyautogui.click(int(click_x), int(click_y), button='right' if mouse_button == 'right' else 'left')
+                    self._perform_foreground_mouse_action(int(click_x), int(click_y), mouse_button, action_mode, hold_ms)
                     self._notify_status(
-                        f"Image found: {os.path.basename(image_path)} -> {mouse_button} click at ({int(click_x)}, {int(click_y)})"
+                        f"Image found: {os.path.basename(image_path)} -> {action_mode} at ({int(click_x)}, {int(click_y)})"
                     )
                 else:
                     # Backward compatibility for old scripts without click_x/click_y.
                     x, y = match_pos
                     x += offset_x
                     y += offset_y
-                    pyautogui.click(x, y, button='right' if mouse_button == 'right' else 'left')
+                    self._perform_foreground_mouse_action(x, y, mouse_button, action_mode, hold_ms)
                     self._notify_status(
-                        f"Image found: {os.path.basename(image_path)} -> {mouse_button} click at image position ({x}, {y})"
+                        f"Image found: {os.path.basename(image_path)} -> {action_mode} at image position ({x}, {y})"
                     )
             else:
                 self._notify_status(f"Image not found: {os.path.basename(image_path)}")
@@ -262,7 +275,9 @@ class AutoClicker:
     def _execute_image_direct_click(self, action: ClickAction):
         """Execute direct-image click: click matched image center when detected."""
         image_path = action.data.get('image_path', '')
+        action_mode = str(action.data.get('action_mode', 'mouse_click')).lower()
         mouse_button = str(action.data.get('mouse_button', 'left')).lower()
+        hold_ms = int(action.data.get('hold_ms', 1000) or 1000)
         target_hwnd = action.data.get('target_hwnd')
         target_title = action.data.get('target_title', '')
         
@@ -286,17 +301,21 @@ class AutoClicker:
             self._notify_status(f"Image not found: {os.path.basename(image_path)}")
             return
         
+        if action_mode in ("key_press", "hotkey", "key_hold", "key_hold_true"):
+            self._execute_key_action(action, target_hwnd)
+            return
+        
         mx, my = int(match_pos[0]), int(match_pos[1])
         if target_hwnd is not None:
             cx, cy = win32gui.ScreenToClient(target_hwnd, (mx, my))
-            self._post_click_client(target_hwnd, int(cx), int(cy), mouse_button)
+            self._post_click_client(target_hwnd, int(cx), int(cy), mouse_button, action_mode, hold_ms)
             self._notify_status(
-                f"Image direct {mouse_button} click: {os.path.basename(image_path)} -> target client ({int(cx)}, {int(cy)})"
+                f"Image direct {action_mode}: {os.path.basename(image_path)} -> target client ({int(cx)}, {int(cy)})"
             )
         else:
-            pyautogui.click(mx, my, button='right' if mouse_button == 'right' else 'left')
+            self._perform_foreground_mouse_action(mx, my, mouse_button, action_mode, hold_ms)
             self._notify_status(
-                f"Image direct {mouse_button} click: {os.path.basename(image_path)} -> screen ({mx}, {my})"
+                f"Image direct {action_mode}: {os.path.basename(image_path)} -> screen ({mx}, {my})"
             )
     
     def _validate_target_window(self, hwnd: int):
@@ -309,23 +328,163 @@ class AutoClicker:
             return False, "Target window is hidden."
         return True, ""
     
-    def _post_click_client(self, hwnd: int, client_x: int, client_y: int, mouse_button: str = "left"):
-        """Post mouse click messages to the most relevant child window at point."""
+    def _post_click_client(
+        self,
+        hwnd: int,
+        client_x: int,
+        client_y: int,
+        mouse_button: str = "left",
+        action_mode: str = "mouse_click",
+        hold_ms: int = 1000
+    ):
+        """Post mouse action messages to the most relevant child window at point."""
         screen_x, screen_y = win32gui.ClientToScreen(hwnd, (int(client_x), int(client_y)))
         click_hwnd, lx, ly = self._resolve_click_target(hwnd, int(client_x), int(client_y))
         lparam = win32api.MAKELONG(int(lx), int(ly))
         win32gui.PostMessage(click_hwnd, win32con.WM_MOUSEMOVE, 0, lparam)
-        if str(mouse_button).lower() == "right":
+        button = str(mouse_button).lower()
+        mode = str(action_mode).lower()
+
+        if button == "right":
             win32gui.PostMessage(click_hwnd, win32con.WM_RBUTTONDOWN, win32con.MK_RBUTTON, lparam)
+            if mode == "mouse_hold":
+                time.sleep(max(0, int(hold_ms)) / 1000.0)
             win32gui.PostMessage(click_hwnd, win32con.WM_RBUTTONUP, 0, lparam)
             # Some apps only react to right-click when WM_CONTEXTMENU is posted.
             context_lparam = win32api.MAKELONG(int(screen_x), int(screen_y))
             win32gui.PostMessage(click_hwnd, win32con.WM_CONTEXTMENU, click_hwnd, context_lparam)
             if click_hwnd != hwnd:
                 win32gui.PostMessage(hwnd, win32con.WM_CONTEXTMENU, click_hwnd, context_lparam)
+        elif button == "middle":
+            win32gui.PostMessage(click_hwnd, win32con.WM_MBUTTONDOWN, win32con.MK_MBUTTON, lparam)
+            if mode == "mouse_hold":
+                time.sleep(max(0, int(hold_ms)) / 1000.0)
+            win32gui.PostMessage(click_hwnd, win32con.WM_MBUTTONUP, 0, lparam)
         else:
             win32gui.PostMessage(click_hwnd, win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON, lparam)
+            if mode == "mouse_hold":
+                time.sleep(max(0, int(hold_ms)) / 1000.0)
             win32gui.PostMessage(click_hwnd, win32con.WM_LBUTTONUP, 0, lparam)
+    
+    def _perform_foreground_mouse_action(self, x: int, y: int, mouse_button: str, action_mode: str, hold_ms: int):
+        """Perform mouse action using pyautogui on foreground."""
+        button = 'left'
+        if str(mouse_button).lower() == 'right':
+            button = 'right'
+        elif str(mouse_button).lower() == 'middle':
+            button = 'middle'
+
+        if str(action_mode).lower() == "mouse_hold":
+            pyautogui.mouseDown(int(x), int(y), button=button)
+            time.sleep(max(0, int(hold_ms)) / 1000.0)
+            pyautogui.mouseUp(int(x), int(y), button=button)
+        else:
+            pyautogui.click(int(x), int(y), button=button)
+
+    def _execute_key_action(self, action: ClickAction, target_hwnd: Optional[int] = None):
+        """Execute keyboard action types: key_press, hotkey, key_hold."""
+        mode = str(action.data.get('action_mode', '')).lower()
+        key_name = str(action.data.get('key_name', '')).lower()
+        hotkey_keys = action.data.get('hotkey_keys') or []
+        hold_ms = int(action.data.get('hold_ms', 1000) or 1000)
+        
+        # Keyboard actions are generally focus-based. Bring target to foreground first.
+        if target_hwnd:
+            try:
+                win32gui.SetForegroundWindow(int(target_hwnd))
+                time.sleep(0.05)
+            except Exception:
+                pass
+        
+        if mode == "key_press" and key_name:
+            pyautogui.press(key_name)
+            self._notify_status(f"Key press: {key_name}")
+        elif mode == "key_hold" and key_name:
+            # Many applications (e.g. Excel) do not auto-repeat reliably with synthetic keyDown.
+            # Emulate hold by repeatedly pressing key during hold duration.
+            duration = max(0, hold_ms) / 1000.0
+            if duration <= 0:
+                pyautogui.press(key_name)
+            else:
+                repeat_interval = 0.06  # ~16 presses/sec feels like normal key repeat
+                end_at = time.time() + duration
+                while time.time() < end_at and self.is_running:
+                    pyautogui.press(key_name)
+                    time.sleep(repeat_interval)
+            self._notify_status(f"Key hold (repeat): {key_name} ({hold_ms}ms)")
+        elif mode == "key_hold_true" and key_name:
+            pyautogui.keyDown(key_name)
+            time.sleep(max(0, hold_ms) / 1000.0)
+            pyautogui.keyUp(key_name)
+            self._notify_status(f"Key hold (true): {key_name} ({hold_ms}ms)")
+        elif mode == "hotkey" and hotkey_keys:
+            pyautogui.hotkey(*[str(k).lower() for k in hotkey_keys])
+            self._notify_status(f"Hotkey: {'+'.join(str(k) for k in hotkey_keys)}")
+
+    def _vk_from_key(self, key_name: str):
+        key = str(key_name).lower()
+        vk_map = {
+            "ctrl": win32con.VK_CONTROL,
+            "shift": win32con.VK_SHIFT,
+            "alt": win32con.VK_MENU,
+            "win": win32con.VK_LWIN,
+            "enter": win32con.VK_RETURN,
+            "tab": win32con.VK_TAB,
+            "esc": win32con.VK_ESCAPE,
+            "space": win32con.VK_SPACE,
+            "up": win32con.VK_UP,
+            "down": win32con.VK_DOWN,
+            "left": win32con.VK_LEFT,
+            "right": win32con.VK_RIGHT,
+            "home": win32con.VK_HOME,
+            "end": win32con.VK_END,
+            "pageup": win32con.VK_PRIOR,
+            "pagedown": win32con.VK_NEXT,
+            "delete": win32con.VK_DELETE,
+            "backspace": win32con.VK_BACK,
+            "insert": win32con.VK_INSERT,
+        }
+        if key in vk_map:
+            return vk_map[key]
+        if key.startswith("f") and key[1:].isdigit():
+            n = int(key[1:])
+            if 1 <= n <= 24:
+                return win32con.VK_F1 + (n - 1)
+        if len(key) == 1:
+            ch = key.upper()
+            if "A" <= ch <= "Z" or "0" <= ch <= "9":
+                return ord(ch)
+        return None
+
+    def _target_key_down(self, hwnd: int, key_name: str):
+        vk = self._vk_from_key(key_name)
+        if vk is None:
+            return
+        win32gui.PostMessage(hwnd, win32con.WM_KEYDOWN, vk, 0)
+
+    def _target_key_up(self, hwnd: int, key_name: str):
+        vk = self._vk_from_key(key_name)
+        if vk is None:
+            return
+        win32gui.PostMessage(hwnd, win32con.WM_KEYUP, vk, 0)
+
+    def _target_key_tap(self, hwnd: int, key_name: str):
+        self._target_key_down(hwnd, key_name)
+        self._target_key_up(hwnd, key_name)
+
+    def _target_hotkey(self, hwnd: int, keys):
+        if not keys:
+            return
+        if len(keys) == 1:
+            self._target_key_tap(hwnd, keys[0])
+            return
+        modifiers = keys[:-1]
+        main_key = keys[-1]
+        for k in modifiers:
+            self._target_key_down(hwnd, k)
+        self._target_key_tap(hwnd, main_key)
+        for k in reversed(modifiers):
+            self._target_key_up(hwnd, k)
     
     def _resolve_click_target(self, hwnd: int, client_x: int, client_y: int):
         """

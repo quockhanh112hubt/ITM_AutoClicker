@@ -96,7 +96,7 @@ class ClickPositionDialog(QDialog):
         instructions = QLabel(
             f"Image {image_num} captured!\n\n"
             "Now position your mouse at the click location and press PAGE UP to record Left Click.\n"
-            "Press PAGE DOWN to choose action (currently Right Click) and record.\n"
+            "Press PAGE DOWN to choose advanced action and record.\n"
             "You can click anywhere on the screen - it doesn't have to be on the image.\n\n"
             "Press ESC to cancel recording."
         )

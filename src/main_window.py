@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QInputDialog
 )
 from PyQt6.QtCore import Qt, QTimer, QSize
-from PyQt6.QtGui import QFont, QColor, QPixmap, QCursor
+from PyQt6.QtGui import QFont, QColor, QPixmap
 from src.click_script import ClickScript, ClickAction, ClickType
 from src.config import Config
 from src.auto_clicker import AutoClicker
@@ -20,6 +20,7 @@ from src.keyboard_listener import KeyboardListener
 from src.image_matcher import ImageMatcher
 from src.image_recording_manager import ImageRecordingManager
 from src.window_picker import WindowPickerDialog, Window
+from src.action_options import choose_advanced_action
 from pynput import mouse
 import threading
 import win32gui
@@ -110,6 +111,7 @@ class PositionRecorder:
             self.positions.append({
                 "x": int(x),
                 "y": int(y),
+                "action_mode": "mouse_click",
                 "mouse_button": "left"
             })
             if self.on_position_recorded:
@@ -120,20 +122,21 @@ class PositionRecorder:
         if not self.is_recording:
             return
         
-        mouse_button = "right"
+        action_data = {"action_mode": "mouse_click", "mouse_button": "right"}
         if self.on_choose_action:
             chosen = self.on_choose_action()
             if not chosen:
                 return
-            mouse_button = chosen
+            action_data = chosen
         
         mouse_controller = mouse.Controller()
         x, y = mouse_controller.position
-        self.positions.append({
+        payload = {
             "x": int(x),
             "y": int(y),
-            "mouse_button": mouse_button
-        })
+        }
+        payload.update(action_data)
+        self.positions.append(payload)
         if self.on_position_recorded:
             self.on_position_recorded(len(self.positions))
     
@@ -444,34 +447,31 @@ class MainWindow(QMainWindow):
             if action.type == ClickType.POSITION:
                 x = action.data.get('x', 0)
                 y = action.data.get('y', 0)
-                mouse_button = str(action.data.get('mouse_button', 'left')).lower()
-                button_part = f" [{mouse_button.upper()}]"
+                mode_part = f" [{self._format_action_mode_label(action.data)}]"
                 target_title = action.data.get('target_title', '')
                 target_part = f" | Target: {target_title}" if target_title else ""
-                details = f"Position{button_part}: ({x}, {y}){target_part}"
+                details = f"Position{mode_part}: ({x}, {y}){target_part}"
             elif action.type == ClickType.IMAGE:
                 image_path = action.data.get('image_path', '')
                 offset_x = action.data.get('offset_x', 0)
                 offset_y = action.data.get('offset_y', 0)
-                mouse_button = str(action.data.get('mouse_button', 'left')).lower()
-                button_part = f" [{mouse_button.upper()}]"
+                mode_part = f" [{self._format_action_mode_label(action.data)}]"
                 priority_level = int(action.data.get('priority_level', 0) or 0)
                 priority_part = f" | Priority: P{priority_level}" if priority_level > 0 else ""
                 target_title = action.data.get('target_title', '')
                 target_part = f" | Target: {target_title}" if target_title else ""
                 details = (
-                    f"Image{button_part}: {os.path.basename(image_path)} | Offset: ({offset_x}, {offset_y})"
+                    f"Image{mode_part}: {os.path.basename(image_path)} | Offset: ({offset_x}, {offset_y})"
                     f"{priority_part}{target_part}"
                 )
             else:
                 image_path = action.data.get('image_path', '')
-                mouse_button = str(action.data.get('mouse_button', 'left')).lower()
-                button_part = f" [{mouse_button.upper()}]"
+                mode_part = f" [{self._format_action_mode_label(action.data)}]"
                 priority_level = int(action.data.get('priority_level', 0) or 0)
                 priority_part = f" | Priority: P{priority_level}" if priority_level > 0 else ""
                 target_title = action.data.get('target_title', '')
                 target_part = f" | Target: {target_title}" if target_title else ""
-                details = f"Image Direct{button_part}: {os.path.basename(image_path)}{priority_part}{target_part}"
+                details = f"Image Direct{mode_part}: {os.path.basename(image_path)}{priority_part}{target_part}"
             
             item_details = QTableWidgetItem(details)
             item_details.setFlags(item_details.flags() & ~Qt.ItemFlag.ItemIsEditable)
@@ -502,7 +502,7 @@ class MainWindow(QMainWindow):
             "Position Recording",
             f"Target: {self.selected_target_window.title}\n\n"
             "PAGE UP: Record Left Click at current mouse position.\n"
-            "PAGE DOWN: Choose action (currently Right Click) and record at current position.\n"
+            "PAGE DOWN: Choose advanced action and record at current position.\n"
             "Press ESC when finished.",
             QMessageBox.StandardButton.Ok
         )
@@ -514,12 +514,12 @@ class MainWindow(QMainWindow):
                 on_choose_action=self._choose_record_action
             )
             self.position_recorder.start()
-            self.statusBar.showMessage("Recording actions... PAGE UP=Left, PAGE DOWN=Choose action, ESC=finish")
+            self.statusBar.showMessage("Recording actions... PAGE UP=Left, PAGE DOWN=Advanced actions, ESC=finish")
     
     def on_position_recorded(self, count: int):
         """Handle position recorded"""
         self.statusBar.showMessage(
-            f"Recording actions... ({count} recorded) PAGE UP=Left, PAGE DOWN=Choose action, ESC=finish"
+            f"Recording actions... ({count} recorded) PAGE UP=Left, PAGE DOWN=Advanced actions, ESC=finish"
         )
     
     def on_position_recording_cancelled(self, positions):
@@ -535,16 +535,31 @@ class MainWindow(QMainWindow):
                 if isinstance(pos, dict):
                     x = int(pos.get("x", 0))
                     y = int(pos.get("y", 0))
+                    action_mode = str(pos.get("action_mode", "mouse_click")).lower()
                     mouse_button = str(pos.get("mouse_button", "left")).lower()
+                    hold_ms = pos.get("hold_ms")
+                    key_name = pos.get("key_name")
+                    hotkey_keys = pos.get("hotkey_keys")
                 else:
                     # Backward compatibility for older tuple-based records.
                     x, y = pos
+                    action_mode = "mouse_click"
                     mouse_button = "left"
+                    hold_ms = None
+                    key_name = None
+                    hotkey_keys = None
                 action_data = {
                     "x": int(x),
                     "y": int(y),
-                    "mouse_button": mouse_button if mouse_button in ("left", "right") else "left",
+                    "action_mode": action_mode,
+                    "mouse_button": mouse_button if mouse_button in ("left", "right", "middle") else "left",
                 }
+                if hold_ms is not None:
+                    action_data["hold_ms"] = int(hold_ms)
+                if key_name:
+                    action_data["key_name"] = str(key_name)
+                if hotkey_keys:
+                    action_data["hotkey_keys"] = list(hotkey_keys)
                 if target_hwnd is not None:
                     action_data["target_hwnd"] = target_hwnd
                     action_data["target_title"] = target_title
@@ -564,24 +579,7 @@ class MainWindow(QMainWindow):
     
     def _choose_record_action(self):
         """Show action chooser for PAGE DOWN during recording."""
-        options = ["Right Click"]
-        dialog = QInputDialog(self)
-        dialog.setWindowTitle("Choose Action")
-        dialog.setLabelText("Select action for current position:")
-        dialog.setComboBoxItems(options)
-        dialog.setTextValue(options[0])
-        dialog.setOkButtonText("OK")
-        dialog.setCancelButtonText("Cancel")
-        
-        pos = QCursor.pos()
-        dialog.move(pos.x() + 12, pos.y() + 12)
-        
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return None
-        choice = dialog.textValue()
-        if choice == "Right Click":
-            return "right"
-        return "left"
+        return choose_advanced_action(self)
     
     def start_image_recording(self, image_click_type: ClickType = ClickType.IMAGE):
         """Start recording images using the new manager"""
@@ -617,7 +615,11 @@ class MainWindow(QMainWindow):
             click_y=recorded.get("click_y"),
             click_client_x=recorded.get("click_client_x"),
             click_client_y=recorded.get("click_client_y"),
+            action_mode=recorded.get("action_mode", "mouse_click"),
             mouse_button=recorded.get("mouse_button", "left"),
+            hold_ms=recorded.get("hold_ms"),
+            key_name=recorded.get("key_name"),
+            hotkey_keys=recorded.get("hotkey_keys"),
             target_hwnd=recorded.get("target_hwnd"),
             target_title=recorded.get("target_title", ""),
             priority_level=1 if is_direct else 0
@@ -877,6 +879,30 @@ class MainWindow(QMainWindow):
                         action.data["click_client_y"] = int(cy)
                     except Exception:
                         pass
+    
+    def _format_action_mode_label(self, data: dict) -> str:
+        """Format user-facing action mode label for table details."""
+        mode = str(data.get("action_mode", "mouse_click")).lower()
+        button = str(data.get("mouse_button", "left")).lower()
+        if mode == "mouse_click":
+            return f"{button.upper()}"
+        if mode == "mouse_hold":
+            hold_ms = int(data.get("hold_ms", 1000) or 1000)
+            return f"HOLD {button.upper()} {hold_ms}ms"
+        if mode == "key_press":
+            return f"KEY {str(data.get('key_name', '')).upper()}"
+        if mode == "hotkey":
+            keys = data.get("hotkey_keys") or []
+            return "HOTKEY " + "+".join(str(k).upper() for k in keys)
+        if mode == "key_hold":
+            hold_ms = int(data.get("hold_ms", 1000) or 1000)
+            key_name = str(data.get("key_name", "")).upper()
+            return f"HOLD KEY (REPEAT) {key_name} {hold_ms}ms"
+        if mode == "key_hold_true":
+            hold_ms = int(data.get("hold_ms", 1000) or 1000)
+            key_name = str(data.get("key_name", "")).upper()
+            return f"HOLD KEY (TRUE) {key_name} {hold_ms}ms"
+        return button.upper()
     
     def closeEvent(self, event):
         """Handle window close"""

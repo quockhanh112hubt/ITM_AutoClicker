@@ -4,7 +4,7 @@ setlocal
 REM ITM AutoClicker build script
 REM Update this version for each release
 set APP_NAME=ITM_AutoClicker
-set APP_VERSION=1.0.1
+set APP_VERSION=1.0.2
 set ENTRYPOINT=main.py
 
 echo ========================================
