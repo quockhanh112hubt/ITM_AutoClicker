@@ -11,7 +11,7 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox, QRadioButton, QButtonGroup, QStatusBar,
     QInputDialog
 )
-from PyQt6.QtCore import Qt, QTimer, QSize
+from PyQt6.QtCore import Qt, QTimer, QSize, pyqtSignal
 from PyQt6.QtGui import QFont, QColor, QPixmap
 from src.click_script import ClickScript, ClickAction, ClickType
 from src.config import Config
@@ -192,6 +192,7 @@ class ImageRecorder:
 
 class MainWindow(QMainWindow):
     """Main application window"""
+    action_executed_signal = pyqtSignal(int)
     
     def __init__(self):
         super().__init__()
@@ -207,6 +208,7 @@ class MainWindow(QMainWindow):
             self.config.get("priority_cooldown_ms", 800)
         )
         self.auto_clicker.set_on_status_changed(self.on_status_changed)
+        self.auto_clicker.set_on_action_executed(self._on_action_executed_from_worker)
         
         # Initialize keyboard listener for Start/Stop
         self.keyboard_listener = KeyboardListener()
@@ -215,6 +217,7 @@ class MainWindow(QMainWindow):
         
         # Current script
         self.current_script = ClickScript()
+        self.action_counts: list[int] = []
         
         # Recorders
         self.position_recorder = None
@@ -223,6 +226,8 @@ class MainWindow(QMainWindow):
         self.pending_image_action_type = ClickType.IMAGE
         self.selected_target_window: Window | None = None
         self.target_info_label = None
+        self._updating_table = False
+        self.action_executed_signal.connect(self._on_action_executed_main_thread)
         
         # Setup UI
         self.setup_ui()
@@ -285,13 +290,16 @@ class MainWindow(QMainWindow):
         
         # Table for actions
         self.action_table = QTableWidget()
-        self.action_table.setColumnCount(5)
-        self.action_table.setHorizontalHeaderLabels(["#", "Type", "Image", "Priority", "Details"])
+        self.action_table.setColumnCount(7)
+        self.action_table.setHorizontalHeaderLabels(["#", "Type", "Image", "Priority", "Delay (ms)", "Count", "Details"])
         self.action_table.setColumnWidth(0, 50)
         self.action_table.setColumnWidth(1, 150)
         self.action_table.setColumnWidth(2, 110)
         self.action_table.setColumnWidth(3, 90)
-        self.action_table.setColumnWidth(4, 450)
+        self.action_table.setColumnWidth(4, 90)
+        self.action_table.setColumnWidth(5, 80)
+        self.action_table.setColumnWidth(6, 360)
+        self.action_table.itemChanged.connect(self.on_action_table_item_changed)
         layout.addWidget(self.action_table)
         
         # Buttons layout
@@ -398,84 +406,102 @@ class MainWindow(QMainWindow):
     
     def update_table(self):
         """Update the actions table"""
-        self.action_table.setRowCount(len(self.current_script.get_actions()))
-        
-        for i, action in enumerate(self.current_script.get_actions()):
-            self.action_table.setRowHeight(i, 56)
+        self._updating_table = True
+        try:
+            actions = self.current_script.get_actions()
+            self._sync_action_counts(len(actions))
+            self.action_table.setRowCount(len(actions))
+            
+            for i, action in enumerate(actions):
+                self.action_table.setRowHeight(i, 56)
 
-            # Index
-            item_index = QTableWidgetItem(str(i + 1))
-            item_index.setFlags(item_index.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.action_table.setItem(i, 0, item_index)
-            
-            # Type
-            item_type = QTableWidgetItem(action.type.value.upper())
-            item_type.setFlags(item_type.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.action_table.setItem(i, 1, item_type)
-            
-            # Image preview
-            preview_label = QLabel("-")
-            preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            if action.type in (ClickType.IMAGE, ClickType.IMAGE_DIRECT):
-                image_path = action.data.get('image_path', '')
-                if image_path and os.path.exists(image_path):
-                    pixmap = QPixmap(image_path)
-                    if not pixmap.isNull():
-                        preview_label.setPixmap(
-                            pixmap.scaled(
-                                96,
-                                48,
-                                Qt.AspectRatioMode.KeepAspectRatio,
-                                Qt.TransformationMode.SmoothTransformation
+                # Index
+                item_index = QTableWidgetItem(str(i + 1))
+                item_index.setFlags(item_index.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self.action_table.setItem(i, 0, item_index)
+                
+                # Type
+                item_type = QTableWidgetItem(action.type.value.upper())
+                item_type.setFlags(item_type.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self.action_table.setItem(i, 1, item_type)
+                
+                # Image preview
+                preview_label = QLabel("-")
+                preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                if action.type in (ClickType.IMAGE, ClickType.IMAGE_DIRECT):
+                    image_path = action.data.get('image_path', '')
+                    if image_path and os.path.exists(image_path):
+                        pixmap = QPixmap(image_path)
+                        if not pixmap.isNull():
+                            preview_label.setPixmap(
+                                pixmap.scaled(
+                                    96,
+                                    48,
+                                    Qt.AspectRatioMode.KeepAspectRatio,
+                                    Qt.TransformationMode.SmoothTransformation
+                                )
                             )
-                        )
-                        preview_label.setText("")
-            self.action_table.setCellWidget(i, 2, preview_label)
-            
-            # Priority
-            if action.type in (ClickType.IMAGE, ClickType.IMAGE_DIRECT):
-                priority_level = int(action.data.get('priority_level', 0) or 0)
-                priority_text = f"P{priority_level}" if priority_level > 0 else "-"
-            else:
-                priority_text = "-"
-            item_priority = QTableWidgetItem(priority_text)
-            item_priority.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            item_priority.setFlags(item_priority.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.action_table.setItem(i, 3, item_priority)
+                            preview_label.setText("")
+                self.action_table.setCellWidget(i, 2, preview_label)
+                
+                # Priority
+                if action.type in (ClickType.IMAGE, ClickType.IMAGE_DIRECT):
+                    priority_level = int(action.data.get('priority_level', 0) or 0)
+                    priority_text = f"P{priority_level}" if priority_level > 0 else "-"
+                else:
+                    priority_text = "-"
+                item_priority = QTableWidgetItem(priority_text)
+                item_priority.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                item_priority.setFlags(item_priority.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self.action_table.setItem(i, 3, item_priority)
+                
+                # Delay (editable)
+                delay_ms = int(action.data.get('delay_ms', self.config.get("click_delay_ms", 100)) or 0)
+                item_delay = QTableWidgetItem(str(delay_ms))
+                item_delay.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self.action_table.setItem(i, 4, item_delay)
+                
+                # Count (read-only)
+                item_count = QTableWidgetItem(str(int(self.action_counts[i])))
+                item_count.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                item_count.setFlags(item_count.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self.action_table.setItem(i, 5, item_count)
 
-            # Details
-            if action.type == ClickType.POSITION:
-                x = action.data.get('x', 0)
-                y = action.data.get('y', 0)
-                mode_part = f" [{self._format_action_mode_label(action.data)}]"
-                target_title = action.data.get('target_title', '')
-                target_part = f" | Target: {target_title}" if target_title else ""
-                details = f"Position{mode_part}: ({x}, {y}){target_part}"
-            elif action.type == ClickType.IMAGE:
-                image_path = action.data.get('image_path', '')
-                offset_x = action.data.get('offset_x', 0)
-                offset_y = action.data.get('offset_y', 0)
-                mode_part = f" [{self._format_action_mode_label(action.data)}]"
-                priority_level = int(action.data.get('priority_level', 0) or 0)
-                priority_part = f" | Priority: P{priority_level}" if priority_level > 0 else ""
-                target_title = action.data.get('target_title', '')
-                target_part = f" | Target: {target_title}" if target_title else ""
-                details = (
-                    f"Image{mode_part}: {os.path.basename(image_path)} | Offset: ({offset_x}, {offset_y})"
-                    f"{priority_part}{target_part}"
-                )
-            else:
-                image_path = action.data.get('image_path', '')
-                mode_part = f" [{self._format_action_mode_label(action.data)}]"
-                priority_level = int(action.data.get('priority_level', 0) or 0)
-                priority_part = f" | Priority: P{priority_level}" if priority_level > 0 else ""
-                target_title = action.data.get('target_title', '')
-                target_part = f" | Target: {target_title}" if target_title else ""
-                details = f"Image Direct{mode_part}: {os.path.basename(image_path)}{priority_part}{target_part}"
-            
-            item_details = QTableWidgetItem(details)
-            item_details.setFlags(item_details.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.action_table.setItem(i, 4, item_details)
+                # Details
+                if action.type == ClickType.POSITION:
+                    x = action.data.get('x', 0)
+                    y = action.data.get('y', 0)
+                    mode_part = f" [{self._format_action_mode_label(action.data)}]"
+                    target_title = action.data.get('target_title', '')
+                    target_part = f" | Target: {target_title}" if target_title else ""
+                    details = f"Position{mode_part}: ({x}, {y}){target_part}"
+                elif action.type == ClickType.IMAGE:
+                    image_path = action.data.get('image_path', '')
+                    offset_x = action.data.get('offset_x', 0)
+                    offset_y = action.data.get('offset_y', 0)
+                    mode_part = f" [{self._format_action_mode_label(action.data)}]"
+                    priority_level = int(action.data.get('priority_level', 0) or 0)
+                    priority_part = f" | Priority: P{priority_level}" if priority_level > 0 else ""
+                    target_title = action.data.get('target_title', '')
+                    target_part = f" | Target: {target_title}" if target_title else ""
+                    details = (
+                        f"Image{mode_part}: {os.path.basename(image_path)} | Offset: ({offset_x}, {offset_y})"
+                        f"{priority_part}{target_part}"
+                    )
+                else:
+                    image_path = action.data.get('image_path', '')
+                    mode_part = f" [{self._format_action_mode_label(action.data)}]"
+                    priority_level = int(action.data.get('priority_level', 0) or 0)
+                    priority_part = f" | Priority: P{priority_level}" if priority_level > 0 else ""
+                    target_title = action.data.get('target_title', '')
+                    target_part = f" | Target: {target_title}" if target_title else ""
+                    details = f"Image Direct{mode_part}: {os.path.basename(image_path)}{priority_part}{target_part}"
+                
+                item_details = QTableWidgetItem(details)
+                item_details.setFlags(item_details.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self.action_table.setItem(i, 6, item_details)
+        finally:
+            self._updating_table = False
     
     def on_add_action(self):
         """Handle add action button"""
@@ -525,6 +551,7 @@ class MainWindow(QMainWindow):
     def on_position_recording_cancelled(self, positions):
         """Handle position recording cancelled"""
         if positions:
+            default_delay_ms = int(self.config.get("click_delay_ms", 100))
             target_hwnd = None
             target_title = ""
             if self.selected_target_window:
@@ -553,6 +580,7 @@ class MainWindow(QMainWindow):
                     "y": int(y),
                     "action_mode": action_mode,
                     "mouse_button": mouse_button if mouse_button in ("left", "right", "middle") else "left",
+                    "delay_ms": default_delay_ms,
                 }
                 if hold_ms is not None:
                     action_data["hold_ms"] = int(hold_ms)
@@ -606,6 +634,7 @@ class MainWindow(QMainWindow):
     def on_image_recorded(self, recorded: dict, total_count: int):
         """Handle one image+click position recorded and persist it immediately"""
         is_direct = self.pending_image_action_type == ClickType.IMAGE_DIRECT
+        default_delay_ms = int(self.config.get("click_delay_ms", 100))
         action = ClickAction(
             self.pending_image_action_type,
             image_path=recorded.get("image_path", ""),
@@ -622,7 +651,8 @@ class MainWindow(QMainWindow):
             hotkey_keys=recorded.get("hotkey_keys"),
             target_hwnd=recorded.get("target_hwnd"),
             target_title=recorded.get("target_title", ""),
-            priority_level=1 if is_direct else 0
+            priority_level=1 if is_direct else 0,
+            delay_ms=default_delay_ms
         )
         self.current_script.add_action(action)
         self.update_table()
@@ -688,6 +718,38 @@ class MainWindow(QMainWindow):
         else:
             self.statusBar.showMessage(f"Priority disabled for row {row + 1}")
     
+    def on_action_table_item_changed(self, item: QTableWidgetItem):
+        """Handle inline table edits (Delay column)."""
+        if self._updating_table:
+            return
+        if item is None:
+            return
+        if item.column() != 4:
+            return
+        
+        row = item.row()
+        actions = self.current_script.get_actions()
+        if row < 0 or row >= len(actions):
+            return
+        
+        text = (item.text() or "").strip()
+        try:
+            value = int(text)
+            if value < 0:
+                raise ValueError
+        except ValueError:
+            self._updating_table = True
+            try:
+                current = int(actions[row].data.get("delay_ms", self.config.get("click_delay_ms", 100)) or 0)
+                item.setText(str(current))
+            finally:
+                self._updating_table = False
+            self.statusBar.showMessage("Delay must be a non-negative integer (ms)")
+            return
+        
+        actions[row].data["delay_ms"] = value
+        self.statusBar.showMessage(f"Row {row + 1} delay set to {value} ms")
+    
     def on_clear_all(self):
         """Handle clear all button"""
         reply = QMessageBox.question(
@@ -699,6 +761,7 @@ class MainWindow(QMainWindow):
         
         if reply == QMessageBox.StandardButton.Yes:
             self.current_script.clear()
+            self._reset_action_counts()
             self.update_table()
             self.statusBar.showMessage("All actions cleared")
     
@@ -730,6 +793,7 @@ class MainWindow(QMainWindow):
         if file_path:
             try:
                 self.current_script = ClickScript.load(file_path)
+                self._reset_action_counts()
                 self.update_table()
                 self.statusBar.showMessage(f"Script loaded: {os.path.basename(file_path)}")
             except Exception as e:
@@ -745,6 +809,7 @@ class MainWindow(QMainWindow):
             return
         
         self._apply_selected_target_to_actions()
+        self._reset_action_counts()
         self.update_table()
         
         self.auto_clicker.execute_script(self.current_script)
@@ -779,6 +844,45 @@ class MainWindow(QMainWindow):
     def on_status_changed(self, message: str):
         """Handle status changed"""
         self.statusBar.showMessage(message)
+    
+    def _sync_action_counts(self, target_len: int):
+        """Keep action count list aligned with script length."""
+        if len(self.action_counts) < target_len:
+            self.action_counts.extend([0] * (target_len - len(self.action_counts)))
+        elif len(self.action_counts) > target_len:
+            self.action_counts = self.action_counts[:target_len]
+    
+    def _reset_action_counts(self):
+        """Reset all action counts to zero."""
+        self.action_counts = [0] * len(self.current_script.get_actions())
+    
+    def _on_action_executed_from_worker(self, action_index: int):
+        """Forward worker-thread callback to Qt main thread."""
+        self.action_executed_signal.emit(int(action_index))
+    
+    def _on_action_executed_main_thread(self, action_index: int):
+        """Increment and refresh one count cell in table."""
+        if action_index < 0:
+            return
+        self._sync_action_counts(len(self.current_script.get_actions()))
+        if action_index >= len(self.action_counts):
+            return
+        
+        self.action_counts[action_index] += 1
+        if action_index >= self.action_table.rowCount():
+            return
+        
+        self._updating_table = True
+        try:
+            item = self.action_table.item(action_index, 5)
+            if item is None:
+                item = QTableWidgetItem()
+                item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self.action_table.setItem(action_index, 5, item)
+            item.setText(str(int(self.action_counts[action_index])))
+        finally:
+            self._updating_table = False
     
     def _is_recording_active(self) -> bool:
         """Check whether any recording mode is active."""

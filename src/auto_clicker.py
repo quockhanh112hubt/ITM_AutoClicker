@@ -32,6 +32,7 @@ class AutoClicker:
         self.image_matcher = ImageMatcher(confidence=0.8)
         self._execution_thread: Optional[threading.Thread] = None
         self._on_status_changed: Optional[Callable] = None
+        self._on_action_executed: Optional[Callable] = None
         self._priority_last_trigger_at = {}
     
     def set_delay(self, delay_ms: int):
@@ -46,10 +47,19 @@ class AutoClicker:
         """Set callback for status changes"""
         self._on_status_changed = callback
     
+    def set_on_action_executed(self, callback: Callable):
+        """Set callback(action_index) when an action is actually executed."""
+        self._on_action_executed = callback
+    
     def _notify_status(self, message: str):
         """Notify status change"""
         if self._on_status_changed:
             self._on_status_changed(message)
+    
+    def _notify_action_executed(self, action_index: int):
+        """Notify when an action is executed."""
+        if self._on_action_executed:
+            self._on_action_executed(int(action_index))
     
     def execute_script(self, script: ClickScript):
         """
@@ -83,24 +93,28 @@ class AutoClicker:
     
     def _execute_once(self):
         """Execute script once"""
-        for action in self.current_script.get_actions():
+        for action_index, action in enumerate(self.current_script.get_actions()):
             if not self.is_running:
                 break
             
             try:
+                executed = False
                 if action.type == ClickType.POSITION:
-                    self._execute_position_click(action)
+                    executed = self._execute_position_click(action)
                 elif action.type == ClickType.IMAGE:
-                    self._execute_image_click(action)
+                    executed = self._execute_image_click(action)
                 elif action.type == ClickType.IMAGE_DIRECT:
-                    self._execute_image_direct_click(action)
+                    executed = self._execute_image_direct_click(action)
+                
+                if executed:
+                    self._notify_action_executed(action_index)
                 
                 if not self.is_running:
                     break
                 
                 # Always wait delay after each action, including the last action in a cycle.
                 # This keeps timing consistent between ...->last and last->first.
-                time.sleep(self.delay_ms / 1000.0)
+                time.sleep(self._get_action_delay_ms(action) / 1000.0)
                 self._execute_priority_actions()
             except Exception as e:
                 self._notify_status(f"Error executing action: {e}")
@@ -136,15 +150,25 @@ class AutoClicker:
             
             if self._is_image_action_triggered(action):
                 if action.type == ClickType.IMAGE_DIRECT:
-                    self._execute_image_direct_click(action)
+                    executed = self._execute_image_direct_click(action)
                 else:
-                    self._execute_image_click(action)
-                self._priority_last_trigger_at[idx] = time.time()
-                clicked_count += 1
-                time.sleep(self.delay_ms / 1000.0)
+                    executed = self._execute_image_click(action)
+                if executed:
+                    self._notify_action_executed(idx)
+                    self._priority_last_trigger_at[idx] = time.time()
+                    clicked_count += 1
+                    time.sleep(self._get_action_delay_ms(action) / 1000.0)
         
         if clicked_count > 0:
             self._notify_status(f"Priority handled: {clicked_count} action(s). Resume normal sequence.")
+    
+    def _get_action_delay_ms(self, action: ClickAction) -> int:
+        """Return per-action delay in ms, fallback to global delay."""
+        try:
+            value = int(action.data.get('delay_ms', self.delay_ms))
+        except Exception:
+            value = int(self.delay_ms)
+        return max(0, value)
     
     def _is_image_action_triggered(self, action: ClickAction) -> bool:
         """Check whether image condition for an image action is currently met."""
@@ -177,24 +201,24 @@ class AutoClicker:
         target_hwnd = action.data.get('target_hwnd')
 
         if action_mode in ("key_press", "hotkey", "key_hold", "key_hold_true"):
-            self._execute_key_action(action, int(target_hwnd) if target_hwnd else None)
-            return
+            return self._execute_key_action(action, int(target_hwnd) if target_hwnd else None)
 
         if target_hwnd:
             ok, error = self._validate_target_window(int(target_hwnd))
             if not ok:
                 self._stop_due_to_target_error(error)
-                return
+                return False
             if client_x is None or client_y is None:
                 client_x, client_y = win32gui.ScreenToClient(int(target_hwnd), (int(x), int(y)))
             self._post_click_client(int(target_hwnd), int(client_x), int(client_y), mouse_button, action_mode, hold_ms)
             self._notify_status(
                 f"Executed {action_mode} on target hwnd={target_hwnd} at client ({int(client_x)}, {int(client_y)})"
             )
-            return
+            return True
         
         self._perform_foreground_mouse_action(int(x), int(y), mouse_button, action_mode, hold_ms)
         self._notify_status(f"Executed {action_mode} at ({int(x)}, {int(y)})")
+        return True
     
     def _execute_image_click(self, action: ClickAction):
         """Execute image-based click"""
@@ -216,7 +240,7 @@ class AutoClicker:
             ok, error = self._validate_target_window(target_hwnd)
             if not ok:
                 self._stop_due_to_target_error(error, target_title)
-                return
+                return False
         
         if os.path.exists(image_path):
             if target_hwnd is not None:
@@ -229,8 +253,7 @@ class AutoClicker:
                 # Preferred behavior: image is a trigger condition,
                 # click at recorded absolute position from PAGE UP.
                 if action_mode in ("key_press", "hotkey", "key_hold", "key_hold_true"):
-                    self._execute_key_action(action, target_hwnd)
-                    return
+                    return self._execute_key_action(action, target_hwnd)
 
                 if target_hwnd is not None:
                     if click_client_x is not None and click_client_y is not None:
@@ -240,12 +263,14 @@ class AutoClicker:
                         self._notify_status(
                             f"Image found in target: {os.path.basename(image_path)} -> {action_mode} at ({cx}, {cy})"
                         )
+                        return True
                     elif click_x is not None and click_y is not None:
                         cx, cy = win32gui.ScreenToClient(target_hwnd, (int(click_x), int(click_y)))
                         self._post_click_client(target_hwnd, int(cx), int(cy), mouse_button, action_mode, hold_ms)
                         self._notify_status(
                             f"Image found in target: {os.path.basename(image_path)} -> {action_mode} at ({int(cx)}, {int(cy)})"
                         )
+                        return True
                     else:
                         mx, my = match_pos
                         cx, cy = win32gui.ScreenToClient(target_hwnd, (int(mx), int(my)))
@@ -253,11 +278,13 @@ class AutoClicker:
                         self._notify_status(
                             f"Image found in target: {os.path.basename(image_path)} -> {action_mode} at matched position"
                         )
+                        return True
                 elif click_x is not None and click_y is not None:
                     self._perform_foreground_mouse_action(int(click_x), int(click_y), mouse_button, action_mode, hold_ms)
                     self._notify_status(
                         f"Image found: {os.path.basename(image_path)} -> {action_mode} at ({int(click_x)}, {int(click_y)})"
                     )
+                    return True
                 else:
                     # Backward compatibility for old scripts without click_x/click_y.
                     x, y = match_pos
@@ -267,10 +294,13 @@ class AutoClicker:
                     self._notify_status(
                         f"Image found: {os.path.basename(image_path)} -> {action_mode} at image position ({x}, {y})"
                     )
+                    return True
             else:
                 self._notify_status(f"Image not found: {os.path.basename(image_path)}")
+                return False
         else:
             self._notify_status(f"Image file not found: {image_path}")
+            return False
     
     def _execute_image_direct_click(self, action: ClickAction):
         """Execute direct-image click: click matched image center when detected."""
@@ -286,11 +316,11 @@ class AutoClicker:
             ok, error = self._validate_target_window(target_hwnd)
             if not ok:
                 self._stop_due_to_target_error(error, target_title)
-                return
+                return False
         
         if not os.path.exists(image_path):
             self._notify_status(f"Image file not found: {image_path}")
-            return
+            return False
         
         if target_hwnd is not None:
             match_pos = self.image_matcher.find_image_in_window(image_path, target_hwnd)
@@ -299,11 +329,10 @@ class AutoClicker:
         
         if not match_pos:
             self._notify_status(f"Image not found: {os.path.basename(image_path)}")
-            return
+            return False
         
         if action_mode in ("key_press", "hotkey", "key_hold", "key_hold_true"):
-            self._execute_key_action(action, target_hwnd)
-            return
+            return self._execute_key_action(action, target_hwnd)
         
         mx, my = int(match_pos[0]), int(match_pos[1])
         if target_hwnd is not None:
@@ -312,11 +341,13 @@ class AutoClicker:
             self._notify_status(
                 f"Image direct {action_mode}: {os.path.basename(image_path)} -> target client ({int(cx)}, {int(cy)})"
             )
+            return True
         else:
             self._perform_foreground_mouse_action(mx, my, mouse_button, action_mode, hold_ms)
             self._notify_status(
                 f"Image direct {action_mode}: {os.path.basename(image_path)} -> screen ({mx}, {my})"
             )
+            return True
     
     def _validate_target_window(self, hwnd: int):
         """Validate target window state before background click."""
@@ -399,6 +430,7 @@ class AutoClicker:
         if mode == "key_press" and key_name:
             pyautogui.press(key_name)
             self._notify_status(f"Key press: {key_name}")
+            return True
         elif mode == "key_hold" and key_name:
             # Many applications (e.g. Excel) do not auto-repeat reliably with synthetic keyDown.
             # Emulate hold by repeatedly pressing key during hold duration.
@@ -412,14 +444,18 @@ class AutoClicker:
                     pyautogui.press(key_name)
                     time.sleep(repeat_interval)
             self._notify_status(f"Key hold (repeat): {key_name} ({hold_ms}ms)")
+            return True
         elif mode == "key_hold_true" and key_name:
             pyautogui.keyDown(key_name)
             time.sleep(max(0, hold_ms) / 1000.0)
             pyautogui.keyUp(key_name)
             self._notify_status(f"Key hold (true): {key_name} ({hold_ms}ms)")
+            return True
         elif mode == "hotkey" and hotkey_keys:
             pyautogui.hotkey(*[str(k).lower() for k in hotkey_keys])
             self._notify_status(f"Hotkey: {'+'.join(str(k) for k in hotkey_keys)}")
+            return True
+        return False
 
     def _vk_from_key(self, key_name: str):
         key = str(key_name).lower()
