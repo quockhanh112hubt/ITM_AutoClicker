@@ -19,7 +19,7 @@ from src.auto_clicker import AutoClicker
 from src.keyboard_listener import KeyboardListener
 from src.image_matcher import ImageMatcher
 from src.image_recording_manager import ImageRecordingManager
-from src.window_picker import WindowPickerDialog
+from src.window_picker import WindowPickerDialog, Window
 from pynput import mouse
 import threading
 import win32gui
@@ -183,7 +183,8 @@ class MainWindow(QMainWindow):
         self.position_recorder = None
         self.image_recorder = None
         self.image_recording_manager = None
-        self.position_target_window = None
+        self.selected_target_window: Window | None = None
+        self.target_info_label = None
         
         # Setup UI
         self.setup_ui()
@@ -222,6 +223,19 @@ class MainWindow(QMainWindow):
         """Create main tab"""
         tab = QWidget()
         layout = QVBoxLayout()
+
+        # Global target window selector
+        target_layout = QHBoxLayout()
+        target_title = QLabel("Target Window:")
+        target_title.setStyleSheet("font-weight: bold;")
+        self.target_info_label = QLabel("Not selected")
+        btn_select_target = QPushButton("Select Target")
+        btn_select_target.clicked.connect(self.on_select_target_window)
+        target_layout.addWidget(target_title)
+        target_layout.addWidget(self.target_info_label)
+        target_layout.addStretch()
+        target_layout.addWidget(btn_select_target)
+        layout.addLayout(target_layout)
         
         # Title
         title = QLabel("Click Script")
@@ -417,6 +431,9 @@ class MainWindow(QMainWindow):
     
     def on_add_action(self):
         """Handle add action button"""
+        if not self._ensure_target_selected():
+            return
+
         dialog = SettingsDialog(self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             click_type = dialog.get_selected_type()
@@ -428,21 +445,14 @@ class MainWindow(QMainWindow):
     
     def start_position_recording(self):
         """Start recording positions"""
-        # Select target window first so position clicks can run in background.
-        picker = WindowPickerDialog(parent=self)
-        if not picker.exec():
-            self.statusBar.showMessage("Position recording cancelled (no target window selected)")
-            return
-        
-        self.position_target_window = picker.get_selected_window()
-        if not self.position_target_window:
+        if not self.selected_target_window:
             self.statusBar.showMessage("Position recording cancelled (invalid target window)")
             return
         
         reply = QMessageBox.information(
             self,
             "Position Recording",
-            f"Target: {self.position_target_window.title}\n\n"
+            f"Target: {self.selected_target_window.title}\n\n"
             "Move mouse to desired positions and press PAGE UP to record each position.\n"
             "Press ESC when finished.",
             QMessageBox.StandardButton.Ok
@@ -465,9 +475,9 @@ class MainWindow(QMainWindow):
         if positions:
             target_hwnd = None
             target_title = ""
-            if self.position_target_window:
-                target_hwnd = int(self.position_target_window.hwnd)
-                target_title = self.position_target_window.title
+            if self.selected_target_window:
+                target_hwnd = int(self.selected_target_window.hwnd)
+                target_title = self.selected_target_window.title
             
             for x, y in positions:
                 action_data = {
@@ -493,14 +503,18 @@ class MainWindow(QMainWindow):
     
     def start_image_recording(self):
         """Start recording images using the new manager"""
+        if not self.selected_target_window:
+            self.statusBar.showMessage("Image recording cancelled (no target window selected)")
+            return
+
         self.image_recording_manager = ImageRecordingManager(
             on_complete=self.on_image_recording_complete,
             on_cancel=self.on_image_recording_cancelled,
             on_image_recorded=self.on_image_recorded,
             parent=self
         )
-        self.image_recording_manager.start()
-        self.statusBar.showMessage("Image recording started. Select target window...")
+        self.image_recording_manager.start(target_window=self.selected_target_window)
+        self.statusBar.showMessage(f"Image recording started. Target: {self.selected_target_window.title}")
     
     def on_image_recorded(self, recorded: dict, total_count: int):
         """Handle one image+click position recorded and persist it immediately"""
@@ -633,6 +647,12 @@ class MainWindow(QMainWindow):
         if len(self.current_script.get_actions()) == 0:
             QMessageBox.warning(self, "Warning", "No actions to execute!")
             return
+
+        if not self._ensure_target_selected():
+            return
+        
+        self._apply_selected_target_to_actions()
+        self.update_table()
         
         self.auto_clicker.execute_script(self.current_script)
         self.btn_start.setEnabled(False)
@@ -664,6 +684,86 @@ class MainWindow(QMainWindow):
     def on_status_changed(self, message: str):
         """Handle status changed"""
         self.statusBar.showMessage(message)
+    
+    def on_select_target_window(self):
+        """Select a global target window for recording and execution"""
+        picker = WindowPickerDialog(parent=self)
+        if not picker.exec():
+            return
+        
+        selected = picker.get_selected_window()
+        if not selected:
+            self.statusBar.showMessage("No target window selected")
+            return
+        
+        self.selected_target_window = selected
+        self._update_target_label()
+        self.statusBar.showMessage(f"Target selected: {selected.title}")
+    
+    def _update_target_label(self):
+        """Update target info label in main tab"""
+        if not self.target_info_label:
+            return
+        
+        if self.selected_target_window:
+            self.target_info_label.setText(f"{self.selected_target_window.title} (hwnd={self.selected_target_window.hwnd})")
+        else:
+            self.target_info_label.setText("Not selected")
+    
+    def _ensure_target_selected(self) -> bool:
+        """Ensure a global target window is selected"""
+        if self.selected_target_window:
+            try:
+                if win32gui.IsWindow(int(self.selected_target_window.hwnd)):
+                    return True
+                self.statusBar.showMessage("Selected target is no longer valid. Please reselect target window.")
+                self.selected_target_window = None
+                self._update_target_label()
+            except Exception:
+                self.selected_target_window = None
+                self._update_target_label()
+        
+        self.on_select_target_window()
+        return self.selected_target_window is not None
+    
+    def _apply_selected_target_to_actions(self):
+        """Apply selected target to all actions before Start."""
+        if not self.selected_target_window:
+            return
+        
+        target_hwnd = int(self.selected_target_window.hwnd)
+        target_title = self.selected_target_window.title
+        
+        for action in self.current_script.get_actions():
+            action.data["target_hwnd"] = target_hwnd
+            action.data["target_title"] = target_title
+            
+            if action.type == ClickType.POSITION:
+                # Keep recorded client coordinates if available to avoid drift.
+                client_x = action.data.get("client_x")
+                client_y = action.data.get("client_y")
+                x = action.data.get("x")
+                y = action.data.get("y")
+                if (client_x is None or client_y is None) and x is not None and y is not None:
+                    try:
+                        cx, cy = win32gui.ScreenToClient(target_hwnd, (int(x), int(y)))
+                        action.data["client_x"] = int(cx)
+                        action.data["client_y"] = int(cy)
+                    except Exception:
+                        pass
+            elif action.type == ClickType.IMAGE:
+                # Keep recorded client coordinates if available to avoid drift.
+                click_client_x = action.data.get("click_client_x")
+                click_client_y = action.data.get("click_client_y")
+                click_x = action.data.get("click_x")
+                click_y = action.data.get("click_y")
+                if (click_client_x is None or click_client_y is None) and click_x is not None and click_y is not None:
+                    try:
+                        cx, cy = win32gui.ScreenToClient(target_hwnd, (int(click_x), int(click_y)))
+                        action.data["click_client_x"] = int(cx)
+                        action.data["click_client_y"] = int(cy)
+                    except Exception:
+                        pass
     
     def closeEvent(self, event):
         """Handle window close"""

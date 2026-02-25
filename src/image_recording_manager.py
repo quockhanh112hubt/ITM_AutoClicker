@@ -48,19 +48,23 @@ class ImageRecordingManager:
         self.image_dialogs = []
         self.target_window: Optional[Window] = None
         
-    def start(self):
+    def start(self, target_window: Optional[Window] = None):
         """Start image recording process"""
         self.is_recording = True
         self.recorded_images.clear()
         self.current_image_num = self._get_last_image_index()
+        self.target_window = target_window
         
         # Register keyboard callbacks
         self.keyboard_listener.register_callback('esc', self._on_esc)
         self.keyboard_listener.register_callback('page_up', self._on_page_up)
         self.keyboard_listener.start()
         
-        # First, let user select target window
-        self._show_window_picker()
+        # Use pre-selected target if provided, otherwise ask user.
+        if self.target_window:
+            self._start_next_image()
+        else:
+            self._show_window_picker()
     
     def _get_last_image_index(self) -> int:
         """Get the highest existing image index in scripts/images."""

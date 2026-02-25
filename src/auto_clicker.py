@@ -83,7 +83,7 @@ class AutoClicker:
     
     def _execute_once(self):
         """Execute script once"""
-        for i, action in enumerate(self.current_script.get_actions()):
+        for action in self.current_script.get_actions():
             if not self.is_running:
                 break
             
@@ -93,12 +93,15 @@ class AutoClicker:
                 elif action.type == ClickType.IMAGE:
                     self._execute_image_click(action)
                 
-                # Wait delay between clicks
-                if i < len(self.current_script.get_actions()) - 1:
-                    time.sleep(self.delay_ms / 1000.0)
-                    self._execute_priority_actions()
+                if not self.is_running:
+                    break
+                
+                # Always wait delay after each action, including the last action in a cycle.
+                # This keeps timing consistent between ...->last and last->first.
+                time.sleep(self.delay_ms / 1000.0)
+                self._execute_priority_actions()
             except Exception as e:
-                self._notify_status(f"Error executing action {i}: {e}")
+                self._notify_status(f"Error executing action: {e}")
     
     def _execute_priority_actions(self):
         """Execute currently-triggered priority image actions in ascending priority order."""
@@ -258,11 +261,38 @@ class AutoClicker:
         return True, ""
     
     def _post_click_client(self, hwnd: int, client_x: int, client_y: int):
-        """Post left click messages directly to target window client area."""
-        lparam = win32api.MAKELONG(int(client_x), int(client_y))
-        win32gui.PostMessage(hwnd, win32con.WM_MOUSEMOVE, 0, lparam)
-        win32gui.PostMessage(hwnd, win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON, lparam)
-        win32gui.PostMessage(hwnd, win32con.WM_LBUTTONUP, 0, lparam)
+        """Post left click messages to the most relevant child window at point."""
+        click_hwnd, lx, ly = self._resolve_click_target(hwnd, int(client_x), int(client_y))
+        lparam = win32api.MAKELONG(int(lx), int(ly))
+        win32gui.PostMessage(click_hwnd, win32con.WM_MOUSEMOVE, 0, lparam)
+        win32gui.PostMessage(click_hwnd, win32con.WM_LBUTTONDOWN, win32con.MK_LBUTTON, lparam)
+        win32gui.PostMessage(click_hwnd, win32con.WM_LBUTTONUP, 0, lparam)
+    
+    def _resolve_click_target(self, hwnd: int, client_x: int, client_y: int):
+        """
+        Resolve deepest child window at a client point.
+        Returns (target_hwnd, local_x, local_y) where local coords are for target_hwnd.
+        """
+        try:
+            screen_x, screen_y = win32gui.ClientToScreen(hwnd, (client_x, client_y))
+            current = hwnd
+            local_x, local_y = client_x, client_y
+            
+            # Walk down child hierarchy at click point.
+            for _ in range(10):
+                child = win32gui.ChildWindowFromPointEx(
+                    current,
+                    (int(local_x), int(local_y)),
+                    win32con.CWP_SKIPDISABLED | win32con.CWP_SKIPINVISIBLE
+                )
+                if not child or child == current:
+                    break
+                current = child
+                local_x, local_y = win32gui.ScreenToClient(current, (int(screen_x), int(screen_y)))
+            
+            return current, int(local_x), int(local_y)
+        except Exception:
+            return hwnd, int(client_x), int(client_y)
     
     def _stop_due_to_target_error(self, error: str, target_title: str = ""):
         """Stop execution when target window is not usable."""
