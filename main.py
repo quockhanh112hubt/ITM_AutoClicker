@@ -23,10 +23,14 @@ except Exception:
 
 from src.main_window import MainWindow
 from PyQt6.QtWidgets import QApplication
+from PyQt6.QtGui import QIcon
 
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    icon_path = os.path.join(os.path.dirname(__file__), "resource", "Icon.ico")
+    if os.path.exists(icon_path):
+        app.setWindowIcon(QIcon(icon_path))
     window = MainWindow()
     window.show()
     sys.exit(app.exec())

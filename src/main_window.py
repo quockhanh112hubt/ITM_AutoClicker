@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import (
     QComboBox, QTreeWidget, QTreeWidgetItem, QInputDialog
 )
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QFont, QPixmap
+from PyQt6.QtGui import QFont, QPixmap, QIcon
 from src.click_script import ClickScript, ClickAction, ClickType
 from src.config import Config
 from src.auto_clicker import AutoClicker
@@ -202,7 +202,10 @@ class MainWindow(QMainWindow):
     
     def __init__(self):
         super().__init__()
+        self._icons = self._load_ui_icons()
         self.setWindowTitle("ITM AutoClicker")
+        if not self._icons.get("app").isNull():
+            self.setWindowIcon(self._icons.get("app"))
         self.setMinimumSize(800, 600)
         
         # Initialize config
@@ -537,6 +540,7 @@ class MainWindow(QMainWindow):
                         Qt.CheckState.Checked if entry.get("enabled", True) else Qt.CheckState.Unchecked
                     )
                     action_item.setText(0, str(entry.get("name", f"Action {action_index + 1}")))
+                    self._apply_action_icon(action_item, action)
                     action_item.setText(1, action.type.value.upper())
                     
                     # Image preview
@@ -1092,6 +1096,35 @@ class MainWindow(QMainWindow):
         letters = [chr(c) for c in range(ord("A"), ord("Z") + 1)]
         digits = [str(i) for i in range(0, 10)]
         return special + function_keys + letters + digits
+
+    def _resource_path(self, relative_path: str) -> str:
+        """Resolve resource path for dev and PyInstaller."""
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        return os.path.join(base_dir, relative_path)
+
+    def _load_ui_icons(self) -> dict:
+        """Load UI icons from resource folder."""
+        app_icon = QIcon(self._resource_path(os.path.join("resource", "Icon.ico")))
+        position_icon = QIcon(self._resource_path(os.path.join("resource", "Position.png")))
+        image_icon = QIcon(self._resource_path(os.path.join("resource", "Image.png")))
+        image_direct_icon = QIcon(self._resource_path(os.path.join("resource", "ImageDirect.png")))
+        return {
+            "app": app_icon,
+            "position": position_icon,
+            "image": image_icon,
+            "image_direct": image_direct_icon,
+        }
+
+    def _apply_action_icon(self, item: QTreeWidgetItem, action: ClickAction):
+        """Attach action-type icon to tree row."""
+        if action.type == ClickType.POSITION:
+            icon = self._icons.get("position")
+        elif action.type == ClickType.IMAGE_DIRECT:
+            icon = self._icons.get("image_direct")
+        else:
+            icon = self._icons.get("image")
+        if icon and not icon.isNull():
+            item.setIcon(0, icon)
     
     def _to_hotkey_display(self, key_token: str) -> str:
         """Convert internal token to user display string."""
