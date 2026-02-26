@@ -25,6 +25,7 @@ class ImageRecordingManager:
         on_complete: Callable = None,
         on_cancel: Callable = None,
         on_image_recorded: Callable = None,
+        key_bindings: Optional[dict] = None,
         parent=None
     ):
         """
@@ -49,6 +50,7 @@ class ImageRecordingManager:
         self.image_dialogs = []
         self.target_window: Optional[Window] = None
         self.require_click_position = True
+        self.key_bindings = key_bindings or {}
         
     def start(self, target_window: Optional[Window] = None, require_click_position: bool = True):
         """Start image recording process"""
@@ -57,6 +59,9 @@ class ImageRecordingManager:
         self.current_image_num = self._get_last_image_index()
         self.target_window = target_window
         self.require_click_position = require_click_position
+        
+        for logical_key, physical_key in self.key_bindings.items():
+            self.keyboard_listener.set_binding(logical_key, physical_key)
         
         # Register keyboard callbacks
         self.keyboard_listener.register_callback('esc', self._on_esc)
@@ -235,23 +240,29 @@ class ImageRecordingManager:
         if not self.is_recording:
             return
         
-        action_data = self._choose_click_action()
+        mouse_controller = mouse.Controller()
+        start_x, start_y = mouse_controller.position
+        
+        action_data = self._choose_click_action(int(start_x), int(start_y))
         if not action_data:
             return
-        self._record_waiting_click_position(action_data)
+        self._record_waiting_click_position(action_data, start_x=int(start_x), start_y=int(start_y))
     
-    def _choose_click_action(self):
+    def _choose_click_action(self, start_x: int | None = None, start_y: int | None = None):
         """Choose click action for current click-position recording."""
-        return choose_advanced_action(self.parent)
+        return choose_advanced_action(self.parent, start_x, start_y)
     
-    def _record_waiting_click_position(self, action_data: dict):
+    def _record_waiting_click_position(self, action_data: dict, start_x: int | None = None, start_y: int | None = None):
         """Record click position while waiting for click dialog."""
         if not self.is_recording:
             return
         
         # Get mouse position
-        mouse_controller = mouse.Controller()
-        x, y = mouse_controller.position
+        if start_x is None or start_y is None:
+            mouse_controller = mouse.Controller()
+            x, y = mouse_controller.position
+        else:
+            x, y = int(start_x), int(start_y)
         
         # If waiting for click position, record it
         if hasattr(self, '_waiting_for_click_position') and self._waiting_for_click_position:
@@ -278,11 +289,30 @@ class ImageRecordingManager:
                 "action_mode": str(action_data.get("action_mode", "mouse_click")).lower(),
                 "mouse_button": str(action_data.get("mouse_button", "left")).lower(),
                 "hold_ms": action_data.get("hold_ms"),
+                "drag_to_x": action_data.get("drag_to_x"),
+                "drag_to_y": action_data.get("drag_to_y"),
+                "drag_client_x": None,
+                "drag_client_y": None,
+                "drag_ms": action_data.get("drag_ms"),
                 "key_name": action_data.get("key_name"),
                 "hotkey_keys": action_data.get("hotkey_keys"),
                 "target_hwnd": target_hwnd,
                 "target_title": target_title
             }
+            if (
+                target_hwnd is not None
+                and recorded.get("drag_to_x") is not None
+                and recorded.get("drag_to_y") is not None
+            ):
+                try:
+                    dcx, dcy = win32gui.ScreenToClient(
+                        int(target_hwnd),
+                        (int(recorded.get("drag_to_x")), int(recorded.get("drag_to_y")))
+                    )
+                    recorded["drag_client_x"] = int(dcx)
+                    recorded["drag_client_y"] = int(dcy)
+                except Exception:
+                    pass
             self.recorded_images.append(recorded)
             
             self._waiting_for_click_position = False

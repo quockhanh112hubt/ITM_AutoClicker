@@ -8,7 +8,8 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox,
     QKeySequenceEdit,
 )
-from PyQt6.QtGui import QKeySequence
+from PyQt6.QtCore import QTimer
+from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtGui import QCursor
 
 
@@ -64,6 +65,58 @@ def _ask_hold_ms(parent):
     return int(value)
 
 
+def _ask_drag_ms(parent):
+    options = ["300ms", "500ms", "1000ms", "Custom..."]
+    dialog = _create_dialog(parent, "Drag Duration", "Select drag duration:", options)
+    if dialog.exec() != QDialog.DialogCode.Accepted:
+        return None
+    choice = dialog.textValue()
+    if choice == "300ms":
+        return 300
+    if choice == "500ms":
+        return 500
+    if choice == "1000ms":
+        return 1000
+    value, ok = QInputDialog.getInt(parent, "Custom Drag", "Drag duration (ms):", 500, 50, 60000, 50)
+    if not ok:
+        return None
+    return int(value)
+
+
+def _ask_drag_target_with_enter(parent, start_x: int, start_y: int):
+    dialog = QDialog(parent)
+    dialog.setWindowTitle("Select Drag Target")
+    layout = QVBoxLayout(dialog)
+    layout.addWidget(QLabel(f"Start point: ({int(start_x)}, {int(start_y)})"))
+    layout.addWidget(QLabel("Move mouse to drop point, then press ENTER to confirm."))
+    coords_label = QLabel("")
+    layout.addWidget(coords_label)
+    buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel, parent=dialog)
+    buttons.rejected.connect(dialog.reject)
+    layout.addWidget(buttons)
+    pos = QCursor.pos()
+    dialog.move(pos.x() + 12, pos.y() + 12)
+
+    def update_coords():
+        p = QCursor.pos()
+        coords_label.setText(f"Current mouse: ({int(p.x())}, {int(p.y())})")
+
+    timer = QTimer(dialog)
+    timer.timeout.connect(update_coords)
+    timer.start(60)
+    update_coords()
+
+    sc_return = QShortcut(QKeySequence("Return"), dialog)
+    sc_enter = QShortcut(QKeySequence("Enter"), dialog)
+    sc_return.activated.connect(dialog.accept)
+    sc_enter.activated.connect(dialog.accept)
+
+    if dialog.exec() != QDialog.DialogCode.Accepted:
+        return None
+    p = QCursor.pos()
+    return int(p.x()), int(p.y())
+
+
 def _ask_key(parent, title: str, label: str, single_char: bool = False):
     while True:
         dialog = _create_dialog(parent, title, label)
@@ -110,7 +163,7 @@ def _ask_hotkey(parent):
     return keys
 
 
-def choose_advanced_action(parent):
+def choose_advanced_action(parent, start_x: int | None = None, start_y: int | None = None):
     """
     Open action chooser near cursor.
     Returns a dict describing the selected action or None if cancelled.
@@ -120,6 +173,7 @@ def choose_advanced_action(parent):
         "Middle Click",
         "Mouse Hold Left",
         "Mouse Hold Right",
+        "Drag Left",
         "Key Press",
         "Hotkey",
         "Key Hold (Repeat)",
@@ -144,6 +198,24 @@ def choose_advanced_action(parent):
         if hold_ms is None:
             return None
         return {"action_mode": "mouse_hold", "mouse_button": "right", "hold_ms": hold_ms}
+    if choice == "Drag Left":
+        if start_x is None or start_y is None:
+            p = QCursor.pos()
+            start_x, start_y = int(p.x()), int(p.y())
+        target = _ask_drag_target_with_enter(parent, int(start_x), int(start_y))
+        if not target:
+            return None
+        drag_to_x, drag_to_y = target
+        drag_ms = _ask_drag_ms(parent)
+        if drag_ms is None:
+            return None
+        return {
+            "action_mode": "mouse_drag",
+            "mouse_button": "left",
+            "drag_to_x": int(drag_to_x),
+            "drag_to_y": int(drag_to_y),
+            "drag_ms": int(drag_ms),
+        }
     if choice == "Key Press":
         key = _ask_key(parent, "Key Press", "Enter exactly 1 character (example: A, 5):", single_char=True)
         if not key:

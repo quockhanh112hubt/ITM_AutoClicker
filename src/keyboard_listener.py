@@ -18,6 +18,12 @@ class KeyboardListener(QObject):
     def __init__(self):
         super().__init__()
         self.listener: Optional[keyboard.Listener] = None
+        self.key_bindings = {
+            'page_up': 'page_up',
+            'page_down': 'page_down',
+            'esc': 'esc',
+            'end': 'end'
+        }
         self.callbacks = {
             'page_up': [],
             'page_down': [],
@@ -33,16 +39,59 @@ class KeyboardListener(QObject):
     def on_press(self, key):
         """Handle key press events"""
         try:
-            if key == keyboard.Key.page_up:
+            pressed = self._normalize_pressed_key(key)
+            if not pressed:
+                return
+            if pressed == self.key_bindings.get('page_up'):
                 self._page_up_signal.emit()
-            elif key == keyboard.Key.page_down:
+            elif pressed == self.key_bindings.get('page_down'):
                 self._page_down_signal.emit()
-            elif key == keyboard.Key.esc:
+            elif pressed == self.key_bindings.get('esc'):
                 self._esc_signal.emit()
-            elif key == keyboard.Key.end:
+            elif pressed == self.key_bindings.get('end'):
                 self._end_signal.emit()
         except AttributeError:
             pass
+
+    def _normalize_pressed_key(self, key) -> str:
+        """Normalize pressed key from pynput to internal key token."""
+        # Special keys
+        name = getattr(key, "name", None)
+        if isinstance(name, str) and name:
+            return name.lower()
+        # Character keys
+        ch = getattr(key, "char", None)
+        if isinstance(ch, str) and ch:
+            return ch.lower()
+        return ""
+
+    def _normalize_key_name(self, key_name: str) -> str:
+        """Normalize user key input to internal token format."""
+        value = str(key_name or "").strip().lower()
+        value = value.replace(" ", "_").replace("-", "_")
+        return value
+
+    def set_binding(self, callback_key: str, key_name: str) -> bool:
+        """
+        Set a physical key binding for a logical callback key.
+        Returns True when applied, False when invalid.
+        """
+        if callback_key not in self.key_bindings:
+            return False
+        value = self._normalize_key_name(key_name)
+        if not value:
+            return False
+        if len(value) == 1:
+            self.key_bindings[callback_key] = value
+            return True
+        if hasattr(keyboard.Key, value):
+            self.key_bindings[callback_key] = value
+            return True
+        return False
+
+    def get_binding(self, callback_key: str) -> str:
+        """Get current physical key binding for callback key."""
+        return str(self.key_bindings.get(callback_key, ""))
     
     def _run_callbacks(self, key: str):
         with self._lock:
