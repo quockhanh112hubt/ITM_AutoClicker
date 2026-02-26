@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QTabWidget,
     QLabel, QSpinBox, QFileDialog, QMessageBox, QDialog,
     QDialogButtonBox, QRadioButton, QButtonGroup, QStatusBar,
-    QComboBox, QTreeWidget, QTreeWidgetItem, QInputDialog
+    QComboBox, QTreeWidget, QTreeWidgetItem, QInputDialog, QToolButton
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QPixmap, QIcon
@@ -239,6 +239,8 @@ class MainWindow(QMainWindow):
         self.image_recording_manager = None
         self.pending_image_action_type = ClickType.IMAGE
         self.pending_branch_index: int | None = None
+        self._active_action_tool_button: QToolButton | None = None
+        self._action_tool_buttons: list[QToolButton] = []
         self.selected_target_window: Window | None = None
         self.target_info_label = None
         self._updating_table = False
@@ -303,6 +305,48 @@ class MainWindow(QMainWindow):
         title_font.setBold(True)
         title.setFont(title_font)
         layout.addWidget(title)
+
+        # Action toolbar (replaces Add Action + Select Click Type dialog)
+        action_toolbar = QHBoxLayout()
+        self.btn_tool_position = QToolButton()
+        self.btn_tool_position.setText("Position Based")
+        self.btn_tool_position.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+        self.btn_tool_position.setCheckable(True)
+        if self._icons.get("position") and not self._icons.get("position").isNull():
+            self.btn_tool_position.setIcon(self._icons.get("position"))
+            self.btn_tool_position.setIconSize(QPixmap(28, 28).size())
+        self.btn_tool_position.clicked.connect(lambda: self.on_toolbar_add_action(ClickType.POSITION, self.btn_tool_position))
+        action_toolbar.addWidget(self.btn_tool_position)
+
+        self.btn_tool_image = QToolButton()
+        self.btn_tool_image.setText("Image Based")
+        self.btn_tool_image.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+        self.btn_tool_image.setCheckable(True)
+        if self._icons.get("image") and not self._icons.get("image").isNull():
+            self.btn_tool_image.setIcon(self._icons.get("image"))
+            self.btn_tool_image.setIconSize(QPixmap(28, 28).size())
+        self.btn_tool_image.clicked.connect(lambda: self.on_toolbar_add_action(ClickType.IMAGE, self.btn_tool_image))
+        action_toolbar.addWidget(self.btn_tool_image)
+
+        self.btn_tool_image_direct = QToolButton()
+        self.btn_tool_image_direct.setText("Image Direct")
+        self.btn_tool_image_direct.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+        self.btn_tool_image_direct.setCheckable(True)
+        if self._icons.get("image_direct") and not self._icons.get("image_direct").isNull():
+            self.btn_tool_image_direct.setIcon(self._icons.get("image_direct"))
+            self.btn_tool_image_direct.setIconSize(QPixmap(28, 28).size())
+        self.btn_tool_image_direct.clicked.connect(
+            lambda: self.on_toolbar_add_action(ClickType.IMAGE_DIRECT, self.btn_tool_image_direct)
+        )
+        action_toolbar.addWidget(self.btn_tool_image_direct)
+        self._action_tool_buttons = [
+            self.btn_tool_position,
+            self.btn_tool_image,
+            self.btn_tool_image_direct,
+        ]
+        self._apply_action_toolbar_button_style()
+        action_toolbar.addStretch()
+        layout.addLayout(action_toolbar)
         
         # Tree list for script branches/actions
         self.script_tree = QTreeWidget()
@@ -322,11 +366,6 @@ class MainWindow(QMainWindow):
         
         # Buttons layout
         button_layout = QHBoxLayout()
-        
-        # Add button
-        btn_add = QPushButton("Add Action")
-        btn_add.clicked.connect(self.on_add_action)
-        button_layout.addWidget(btn_add)
         
         btn_add_group = QPushButton("Add Branch")
         btn_add_group.clicked.connect(self.on_add_branch)
@@ -593,7 +632,28 @@ class MainWindow(QMainWindow):
     
     def on_add_action(self):
         """Handle add action button"""
+        dialog = SettingsDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._start_add_action_flow(dialog.get_selected_type())
+
+    def on_toolbar_add_action(self, click_type: ClickType, source_button: QToolButton):
+        """Handle toolbar quick-add action buttons."""
+        if self._active_action_tool_button is source_button and self._is_recording_active():
+            source_button.setChecked(True)
+            return
+        
+        # If another action flow is active, auto-ESC it before starting new one.
+        if self._active_action_tool_button is not None and self._active_action_tool_button is not source_button:
+            self._cancel_recording_for_action_switch()
+        
+        self._active_action_tool_button = source_button
+        source_button.setChecked(True)
+        self._start_add_action_flow(click_type)
+
+    def _start_add_action_flow(self, click_type: ClickType):
+        """Shared flow for adding action by type."""
         if not self._ensure_target_selected():
+            self._release_active_action_tool_button()
             return
         
         branch_index = self._get_selected_branch_index(require_selection=True)
@@ -603,21 +663,40 @@ class MainWindow(QMainWindow):
                 "Select Branch",
                 "Please select a branch in Click Script List before adding action."
             )
-            self.statusBar.showMessage("Select a branch first, then Add Action")
+            self.statusBar.showMessage("Select a branch first, then add action")
+            self._release_active_action_tool_button()
             return
         
         self.pending_branch_index = int(branch_index)
-
-        dialog = SettingsDialog(self)
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            click_type = dialog.get_selected_type()
-            
-            if click_type == ClickType.POSITION:
-                self.start_position_recording()
-            else:
-                self.start_image_recording(click_type)
+        if click_type == ClickType.POSITION:
+            self.start_position_recording()
         else:
-            self.pending_branch_index = None
+            self.start_image_recording(click_type)
+
+    def _release_active_action_tool_button(self):
+        """Release pressed state of currently active toolbar action button."""
+        if self._active_action_tool_button:
+            self._active_action_tool_button.setChecked(False)
+            self._active_action_tool_button = None
+
+    def _set_action_toolbar_locked(self, locked: bool, active_button: QToolButton | None):
+        """Lock other action buttons while one action-flow is in progress."""
+        # No longer locking buttons; kept for compatibility.
+        for button in self._action_tool_buttons:
+            button.setEnabled(True)
+
+    def _cancel_recording_for_action_switch(self):
+        """Auto-ESC current recording flow when switching action button."""
+        # Position recording: stop and persist current recorded points (ESC behavior).
+        if self.position_recorder and self.position_recorder.is_recording:
+            positions = list(self.position_recorder.positions)
+            self.position_recorder.stop()
+            self.on_position_recording_cancelled(positions)
+            return
+        
+        # Image recording: finish gracefully (ESC behavior).
+        if self.image_recording_manager and self.image_recording_manager.is_recording:
+            self.image_recording_manager.finish()
     
     def on_add_branch(self):
         """Add a new script branch."""
@@ -658,6 +737,9 @@ class MainWindow(QMainWindow):
                 f"Recording actions... {self._to_hotkey_display(self.hotkey_bindings['page_up'])}=Left, "
                 f"{self._to_hotkey_display(self.hotkey_bindings['page_down'])}=Advanced actions, ESC=finish"
             )
+        else:
+            self.pending_branch_index = None
+            self._release_active_action_tool_button()
     
     def on_position_recorded(self, count: int):
         """Handle position recorded"""
@@ -744,6 +826,7 @@ class MainWindow(QMainWindow):
         else:
             self.statusBar.showMessage("No positions recorded")
         self.pending_branch_index = None
+        self._release_active_action_tool_button()
     
     def _choose_record_action(self, start_x: int | None = None, start_y: int | None = None):
         """Show action chooser for PAGE DOWN during recording."""
@@ -814,11 +897,13 @@ class MainWindow(QMainWindow):
         else:
             self.statusBar.showMessage("Image recording finished. No images recorded.")
         self.pending_branch_index = None
+        self._release_active_action_tool_button()
     
     def on_image_recording_cancelled(self):
         """Handle image recording cancelled"""
         self.statusBar.showMessage("Image recording cancelled")
         self.pending_branch_index = None
+        self._release_active_action_tool_button()
 
     
     def on_remove_action(self):
@@ -1096,6 +1181,45 @@ class MainWindow(QMainWindow):
         letters = [chr(c) for c in range(ord("A"), ord("Z") + 1)]
         digits = [str(i) for i in range(0, 10)]
         return special + function_keys + letters + digits
+
+    def _apply_action_toolbar_button_style(self):
+        """Apply 3D style for action toolbar buttons."""
+        style = """
+        QToolButton {
+            min-width: 120px;
+            min-height: 56px;
+            padding: 6px 10px 8px 10px;
+            border: 1px solid #8d99a6;
+            border-bottom: 3px solid #64707d;
+            border-radius: 8px;
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                        stop:0 #fefefe, stop:1 #e2e6ea);
+            color: #22303d;
+            font-weight: 600;
+        }
+        QToolButton:hover {
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                        stop:0 #ffffff, stop:1 #d8dee5);
+            border: 1px solid #6a7785;
+        }
+        QToolButton:pressed, QToolButton:checked {
+            padding-top: 8px;
+            padding-bottom: 6px;
+            border: 1px solid #4f5a67;
+            border-bottom: 1px solid #4f5a67;
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                        stop:0 #cfd5dc, stop:1 #b9c1ca);
+            color: #111a22;
+        }
+        QToolButton:disabled {
+            border: 1px solid #c3c8cd;
+            border-bottom: 2px solid #b5bcc3;
+            background: #e9ecef;
+            color: #8d96a0;
+        }
+        """
+        for button in self._action_tool_buttons:
+            button.setStyleSheet(style)
 
     def _resource_path(self, relative_path: str) -> str:
         """Resolve resource path for dev and PyInstaller."""
