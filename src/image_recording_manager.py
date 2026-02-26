@@ -51,6 +51,8 @@ class ImageRecordingManager:
         self.target_window: Optional[Window] = None
         self.require_click_position = True
         self.key_bindings = key_bindings or {}
+        self._waiting_for_click_position = False
+        self._waiting_image_path = ""
         
     def start(self, target_window: Optional[Window] = None, require_click_position: bool = True):
         """Start image recording process"""
@@ -120,12 +122,44 @@ class ImageRecordingManager:
         if not self.target_window:
             return
         
+        self._close_region_selector()
+        
         # Use Qt signal only to avoid duplicate callbacks.
         self.region_selector = WindowRegionSelector(self.target_window.hwnd)
         
         # Connect signal and show
         self.region_selector.region_selected.connect(self._on_region_selected)
         self.region_selector.show()
+
+    def _close_region_selector(self):
+        """Force-close active region overlay if it exists."""
+        if self.region_selector is not None:
+            try:
+                self.region_selector.hide()
+            except Exception:
+                pass
+            try:
+                self.region_selector.close()
+            except Exception:
+                pass
+            try:
+                self.region_selector.deleteLater()
+            except Exception:
+                pass
+            self.region_selector = None
+
+    def _close_image_dialogs(self):
+        """Close all open image-related dialogs."""
+        for dialog in self.image_dialogs:
+            try:
+                dialog.hide()
+            except Exception:
+                pass
+            try:
+                dialog.close()
+            except Exception:
+                pass
+        self.image_dialogs.clear()
     
     def _on_region_selected(self, x1: int, y1: int, x2: int, y2: int):
         """Handle region selected from overlay"""
@@ -316,6 +350,7 @@ class ImageRecordingManager:
             self.recorded_images.append(recorded)
             
             self._waiting_for_click_position = False
+            self._waiting_image_path = ""
             current_count = len(self.recorded_images)
             
             # Update dialog if it exists
@@ -343,6 +378,8 @@ class ImageRecordingManager:
     def _finish_recording(self, cancelled: bool = False):
         """Finish recording and clean up"""
         self.is_recording = False
+        self._waiting_for_click_position = False
+        self._waiting_image_path = ""
         
         # Unregister callbacks
         self.keyboard_listener.unregister_callback('esc', self._on_esc)
@@ -350,13 +387,9 @@ class ImageRecordingManager:
         self.keyboard_listener.unregister_callback('page_down', self._on_page_down)
         self.keyboard_listener.stop()
         
-        # Close dialogs
-        for dialog in self.image_dialogs:
-            try:
-                dialog.close()
-            except:
-                pass
-        self.image_dialogs.clear()
+        # Close overlay + dialogs immediately
+        self._close_region_selector()
+        self._close_image_dialogs()
         
         # Call completion callback
         if self.on_complete:
@@ -365,6 +398,8 @@ class ImageRecordingManager:
     def cancel(self):
         """Cancel recording"""
         self.is_recording = False
+        self._waiting_for_click_position = False
+        self._waiting_image_path = ""
         
         # Cleanup
         self.keyboard_listener.unregister_callback('esc', self._on_esc)
@@ -372,12 +407,8 @@ class ImageRecordingManager:
         self.keyboard_listener.unregister_callback('page_down', self._on_page_down)
         self.keyboard_listener.stop()
         
-        for dialog in self.image_dialogs:
-            try:
-                dialog.close()
-            except:
-                pass
-        self.image_dialogs.clear()
+        self._close_region_selector()
+        self._close_image_dialogs()
         
         # Call cancel callback
         if self.on_cancel:

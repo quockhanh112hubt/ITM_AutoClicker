@@ -241,6 +241,7 @@ class MainWindow(QMainWindow):
         self.pending_branch_index: int | None = None
         self._active_action_tool_button: QToolButton | None = None
         self._action_tool_buttons: list[QToolButton] = []
+        self._last_selected_branch_index: int | None = None
         self.selected_target_window: Window | None = None
         self.target_info_label = None
         self._updating_table = False
@@ -312,9 +313,11 @@ class MainWindow(QMainWindow):
         self.btn_tool_position.setText("Position Based")
         self.btn_tool_position.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         self.btn_tool_position.setCheckable(True)
+        self.btn_tool_position.setMinimumWidth(110)
+        self.btn_tool_position.setMinimumHeight(56)
         if self._icons.get("position") and not self._icons.get("position").isNull():
             self.btn_tool_position.setIcon(self._icons.get("position"))
-            self.btn_tool_position.setIconSize(QPixmap(28, 28).size())
+            self.btn_tool_position.setIconSize(QPixmap(40, 40).size())
         self.btn_tool_position.clicked.connect(lambda: self.on_toolbar_add_action(ClickType.POSITION, self.btn_tool_position))
         action_toolbar.addWidget(self.btn_tool_position)
 
@@ -322,9 +325,11 @@ class MainWindow(QMainWindow):
         self.btn_tool_image.setText("Image Based")
         self.btn_tool_image.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         self.btn_tool_image.setCheckable(True)
+        self.btn_tool_image.setMinimumWidth(110)
+        self.btn_tool_image.setMinimumHeight(56)
         if self._icons.get("image") and not self._icons.get("image").isNull():
             self.btn_tool_image.setIcon(self._icons.get("image"))
-            self.btn_tool_image.setIconSize(QPixmap(28, 28).size())
+            self.btn_tool_image.setIconSize(QPixmap(40, 40).size())
         self.btn_tool_image.clicked.connect(lambda: self.on_toolbar_add_action(ClickType.IMAGE, self.btn_tool_image))
         action_toolbar.addWidget(self.btn_tool_image)
 
@@ -332,9 +337,11 @@ class MainWindow(QMainWindow):
         self.btn_tool_image_direct.setText("Image Direct")
         self.btn_tool_image_direct.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         self.btn_tool_image_direct.setCheckable(True)
+        self.btn_tool_image_direct.setMinimumWidth(110)
+        self.btn_tool_image_direct.setMinimumHeight(56)
         if self._icons.get("image_direct") and not self._icons.get("image_direct").isNull():
             self.btn_tool_image_direct.setIcon(self._icons.get("image_direct"))
-            self.btn_tool_image_direct.setIconSize(QPixmap(28, 28).size())
+            self.btn_tool_image_direct.setIconSize(QPixmap(40, 40).size())
         self.btn_tool_image_direct.clicked.connect(
             lambda: self.on_toolbar_add_action(ClickType.IMAGE_DIRECT, self.btn_tool_image_direct)
         )
@@ -345,7 +352,22 @@ class MainWindow(QMainWindow):
             self.btn_tool_image_direct,
         ]
         self._apply_action_toolbar_button_style()
+
         action_toolbar.addStretch()
+
+        # Start/Stop buttons moved next to action toolbar (right side)
+        self.btn_start = QPushButton(f"Start ({self._to_hotkey_display(self.hotkey_bindings['end'])})")
+        self.btn_start.clicked.connect(self.on_start)
+        self.btn_start.setMinimumWidth(138)
+        self.btn_start.setMinimumHeight(56)
+        action_toolbar.addWidget(self.btn_start)
+
+        self.btn_stop = QPushButton(f"Stop ({self._to_hotkey_display(self.hotkey_bindings['end'])})")
+        self.btn_stop.clicked.connect(self.on_stop)
+        self.btn_stop.setMinimumWidth(138)
+        self.btn_stop.setMinimumHeight(56)
+        action_toolbar.addWidget(self.btn_stop)
+        self._update_run_button_states(False)
         layout.addLayout(action_toolbar)
         
         # Tree list for script branches/actions
@@ -362,6 +384,7 @@ class MainWindow(QMainWindow):
         self.script_tree.setEditTriggers(QTreeWidget.EditTrigger.NoEditTriggers)
         self.script_tree.itemChanged.connect(self.on_script_tree_item_changed)
         self.script_tree.itemDoubleClicked.connect(self.on_script_tree_item_double_clicked)
+        self.script_tree.currentItemChanged.connect(self.on_script_tree_current_item_changed)
         layout.addWidget(self.script_tree)
         
         # Buttons layout
@@ -396,22 +419,6 @@ class MainWindow(QMainWindow):
         button_layout.addWidget(btn_save)
         
         layout.addLayout(button_layout)
-        
-        # Control buttons layout
-        control_layout = QHBoxLayout()
-        
-        # Start button
-        self.btn_start = QPushButton(f"Start ({self._to_hotkey_display(self.hotkey_bindings['end'])})")
-        self.btn_start.clicked.connect(self.on_start)
-        control_layout.addWidget(self.btn_start)
-        
-        # Stop button
-        self.btn_stop = QPushButton(f"Stop ({self._to_hotkey_display(self.hotkey_bindings['end'])})")
-        self.btn_stop.clicked.connect(self.on_stop)
-        control_layout.addWidget(self.btn_stop)
-        self._update_run_button_states(False)
-        
-        layout.addLayout(control_layout)
         
         tab.setLayout(layout)
         return tab
@@ -543,6 +550,7 @@ class MainWindow(QMainWindow):
         """Update tree list for script branches/actions."""
         self._updating_table = True
         try:
+            preferred_branch = self._get_selected_branch_index(require_selection=False)
             self._tree_action_items.clear()
             self.script_tree.clear()
             
@@ -627,6 +635,17 @@ class MainWindow(QMainWindow):
                     self._tree_action_items[key] = action_item
                 
                 group_item.setExpanded(True)
+            
+            if preferred_branch is not None and 0 <= preferred_branch < len(self.script_groups):
+                top = self.script_tree.topLevelItem(int(preferred_branch))
+                if top:
+                    self.script_tree.setCurrentItem(top)
+                    self._last_selected_branch_index = int(preferred_branch)
+            elif len(self.script_groups) > 0:
+                top = self.script_tree.topLevelItem(0)
+                if top:
+                    self.script_tree.setCurrentItem(top)
+                    self._last_selected_branch_index = 0
         finally:
             self._updating_table = False
     
@@ -1156,6 +1175,18 @@ class MainWindow(QMainWindow):
             actions[action_index]["name"] = new_name
             item.setText(0, new_name)
             self.statusBar.showMessage(f"Renamed action: {new_name}")
+
+    def on_script_tree_current_item_changed(self, current: QTreeWidgetItem, previous: QTreeWidgetItem):
+        """Track last selected branch to keep add-action flow smooth across refreshes."""
+        if current is None:
+            return
+        payload = current.data(0, Qt.ItemDataRole.UserRole)
+        if not payload:
+            return
+        if payload[0] == "group":
+            self._last_selected_branch_index = int(payload[1])
+        elif payload[0] == "action":
+            self._last_selected_branch_index = int(payload[1])
     
     def _on_delay_spin_changed(self, group_index: int, action_index: int, value: int):
         """Handle delay changes from per-action spinbox."""
@@ -1186,9 +1217,10 @@ class MainWindow(QMainWindow):
         """Apply 3D style for action toolbar buttons."""
         style = """
         QToolButton {
-            min-width: 120px;
-            min-height: 56px;
-            padding: 6px 10px 8px 10px;
+            min-width: 110px;
+            min-height: 52px;
+            max-height: 64px;
+            padding: 4px 8px 6px 8px;
             border: 1px solid #8d99a6;
             border-bottom: 3px solid #64707d;
             border-radius: 8px;
@@ -1196,6 +1228,7 @@ class MainWindow(QMainWindow):
                                         stop:0 #fefefe, stop:1 #e2e6ea);
             color: #22303d;
             font-weight: 600;
+            font-size: 11px;
         }
         QToolButton:hover {
             background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -1203,8 +1236,8 @@ class MainWindow(QMainWindow):
             border: 1px solid #6a7785;
         }
         QToolButton:pressed, QToolButton:checked {
-            padding-top: 8px;
-            padding-bottom: 6px;
+            padding-top: 5px;
+            padding-bottom: 4px;
             border: 1px solid #4f5a67;
             border-bottom: 1px solid #4f5a67;
             background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
@@ -1304,14 +1337,26 @@ class MainWindow(QMainWindow):
         self.btn_stop.setEnabled(stop_active)
         
         start_style = (
-            "background-color: #3fb950; color: white; font-weight: bold; border: 1px solid #2d8a3c;"
+            "QPushButton {"
+            "background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #56c46c, stop:1 #2f9f45);"
+            "color: white; font-weight: 700; border: 1px solid #2a7f3b; border-bottom: 3px solid #1f5f2c;"
+            "border-radius: 7px; padding: 6px 12px; }"
+            "QPushButton:pressed { border-bottom: 1px solid #1f5f2c; padding-top: 8px; padding-bottom: 4px; }"
             if start_active else
-            "background-color: #d9d9d9; color: #8a8a8a; font-weight: bold; border: 1px solid #c0c0c0;"
+            "QPushButton {"
+            "background: #e6e8ea; color: #8b949e; font-weight: 700; border: 1px solid #c7ccd1;"
+            "border-bottom: 2px solid #b6bcc3; border-radius: 7px; padding: 6px 12px; }"
         )
         stop_style = (
-            "background-color: #f44336; color: white; font-weight: bold; border: 1px solid #c2362b;"
+            "QPushButton {"
+            "background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #ff5f54, stop:1 #df3a30);"
+            "color: white; font-weight: 700; border: 1px solid #b92f27; border-bottom: 3px solid #8f241d;"
+            "border-radius: 7px; padding: 6px 12px; }"
+            "QPushButton:pressed { border-bottom: 1px solid #8f241d; padding-top: 8px; padding-bottom: 4px; }"
             if stop_active else
-            "background-color: #d9d9d9; color: #8a8a8a; font-weight: bold; border: 1px solid #c0c0c0;"
+            "QPushButton {"
+            "background: #e6e8ea; color: #8b949e; font-weight: 700; border: 1px solid #c7ccd1;"
+            "border-bottom: 2px solid #b6bcc3; border-radius: 7px; padding: 6px 12px; }"
         )
         self.btn_start.setStyleSheet(start_style)
         self.btn_stop.setStyleSheet(stop_style)
@@ -1482,6 +1527,10 @@ class MainWindow(QMainWindow):
                     idx = int(payload[1])
                     if 0 <= idx < len(self.script_groups):
                         return idx
+        if self._last_selected_branch_index is not None:
+            idx = int(self._last_selected_branch_index)
+            if 0 <= idx < len(self.script_groups):
+                return idx
         if require_selection:
             return None
         self._ensure_default_group()
