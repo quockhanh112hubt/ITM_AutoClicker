@@ -213,6 +213,17 @@ class ScriptTreeWidget(QTreeWidget):
         source_payload = source_item.data(0, Qt.ItemDataRole.UserRole) if source_item else None
         target_payload = target_item.data(0, Qt.ItemDataRole.UserRole) if target_item else None
 
+        # Prevent branch-over-branch "OnItem" drops because Qt may interpret it as nesting,
+        # which can hide/remove one top-level branch after rebuild.
+        if (
+            source_payload
+            and isinstance(source_payload, tuple)
+            and source_payload[0] == "group"
+            and self.dropIndicatorPosition() == QAbstractItemView.DropIndicatorPosition.OnItem
+        ):
+            event.ignore()
+            return
+
         if (
             source_payload and target_payload
             and isinstance(source_payload, tuple) and isinstance(target_payload, tuple)
