@@ -19,7 +19,7 @@ from src.config import Config
 from src.auto_clicker import AutoClicker
 from src.keyboard_listener import KeyboardListener
 from src.image_recording_manager import ImageRecordingManager
-from src.window_picker import WindowPickerDialog, Window
+from src.window_picker import WindowPickerDialog, Window, WindowPicker
 from src.action_options import choose_advanced_action
 from pynput import mouse
 import win32gui
@@ -2159,7 +2159,7 @@ class MainWindow(QMainWindow):
             return
 
         hwnd = target_data.get("hwnd")
-        title = str(target_data.get("title", ""))
+        title = str(target_data.get("title", "")).strip()
         restored_window = None
         try:
             if hwnd is not None and win32gui.IsWindow(int(hwnd)):
@@ -2168,6 +2168,19 @@ class MainWindow(QMainWindow):
                 restored_window = Window(int(hwnd), live_title, class_name)
         except Exception:
             restored_window = None
+
+        # Fallback: auto-find by title when hwnd changed.
+        if restored_window is None and title:
+            try:
+                windows = WindowPicker.get_windows()
+                title_norm = title.casefold()
+                exact = [w for w in windows if (w.title or "").strip().casefold() == title_norm]
+                partial = [w for w in windows if title_norm and title_norm in (w.title or "").casefold()]
+                found = exact[0] if exact else (partial[0] if partial else None)
+                if found:
+                    restored_window = found
+            except Exception:
+                restored_window = None
 
         if restored_window:
             self.selected_target_window = restored_window
@@ -2178,6 +2191,10 @@ class MainWindow(QMainWindow):
             except Exception:
                 self.selected_target_window = None
 
+        x = target_data.get("x")
+        y = target_data.get("y")
+        width = target_data.get("width")
+        height = target_data.get("height")
         try:
             if self.target_x_spin and "x" in target_data:
                 self.target_x_spin.setValue(int(target_data.get("x", 0)))
@@ -2190,9 +2207,28 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+        # Auto-fix target window geometry after load when window is found.
+        if restored_window and all(v is not None for v in (x, y, width, height)):
+            try:
+                hwnd_int = int(restored_window.hwnd)
+                if win32gui.IsWindow(hwnd_int):
+                    win32gui.MoveWindow(
+                        hwnd_int,
+                        int(x),
+                        int(y),
+                        max(100, int(width)),
+                        max(100, int(height)),
+                        True,
+                    )
+            except Exception:
+                pass
+
         self._update_target_label()
         if restored_window:
-            self.statusBar.showMessage(f"Loaded target metadata: {restored_window.title}")
+            if all(v is not None for v in (x, y, width, height)):
+                self.statusBar.showMessage(f"Loaded target and fixed geometry: {restored_window.title}")
+            else:
+                self.statusBar.showMessage(f"Loaded target metadata: {restored_window.title}")
         else:
             self.statusBar.showMessage("Loaded target geometry from script. Please reselect target window if needed.")
     
