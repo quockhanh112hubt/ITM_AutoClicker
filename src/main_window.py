@@ -9,7 +9,8 @@ from PyQt6.QtWidgets import (
     QPushButton, QTabWidget,
     QLabel, QSpinBox, QFileDialog, QMessageBox, QDialog,
     QDialogButtonBox, QRadioButton, QButtonGroup, QStatusBar,
-    QComboBox, QTreeWidget, QTreeWidgetItem, QInputDialog, QToolButton, QCheckBox
+    QComboBox, QTreeWidget, QTreeWidgetItem, QInputDialog, QToolButton, QCheckBox,
+    QAbstractItemView
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QPixmap, QIcon
@@ -194,6 +195,47 @@ class ImageRecorder:
             self.stop()
             if self.on_cancel:
                 self.on_cancel(self.images)
+
+
+
+class ScriptTreeWidget(QTreeWidget):
+    """Tree widget with signal after internal drag-drop reorder."""
+    order_changed = pyqtSignal()
+    replace_action_requested = pyqtSignal(object, object)  # source_payload, target_payload
+
+    def dropEvent(self, event):
+        # If user drops one action directly on another action, treat it as replace request.
+        try:
+            target_item = self.itemAt(event.position().toPoint())
+        except Exception:
+            target_item = None
+        source_item = self.currentItem()
+        source_payload = source_item.data(0, Qt.ItemDataRole.UserRole) if source_item else None
+        target_payload = target_item.data(0, Qt.ItemDataRole.UserRole) if target_item else None
+
+        if (
+            source_payload and target_payload
+            and isinstance(source_payload, tuple) and isinstance(target_payload, tuple)
+            and len(source_payload) >= 3 and len(target_payload) >= 3
+            and source_payload[0] == "action" and target_payload[0] == "action"
+            and source_payload != target_payload
+            and self.dropIndicatorPosition() == QAbstractItemView.DropIndicatorPosition.OnItem
+        ):
+            reply = QMessageBox.question(
+                self,
+                "Confirm Replace",
+                "Replace target action with dragged action?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self.replace_action_requested.emit(source_payload, target_payload)
+                event.ignore()
+                return
+            event.ignore()
+            return
+
+        super().dropEvent(event)
+        self.order_changed.emit()
 
 
 class MainWindow(QMainWindow):
@@ -388,7 +430,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(action_toolbar)
         
         # Tree list for script branches/actions
-        self.script_tree = QTreeWidget()
+        self.script_tree = ScriptTreeWidget()
         self.script_tree.setColumnCount(7)
         self.script_tree.setHeaderLabels(["Click Script List", "Type", "Image", "Priority", "Delay (ms)", "Count", "Details"])
         self.script_tree.setColumnWidth(0, 220)
@@ -399,9 +441,16 @@ class MainWindow(QMainWindow):
         self.script_tree.setColumnWidth(5, 80)
         self.script_tree.setColumnWidth(6, 360)
         self.script_tree.setEditTriggers(QTreeWidget.EditTrigger.NoEditTriggers)
+        self.script_tree.setDragEnabled(True)
+        self.script_tree.viewport().setAcceptDrops(True)
+        self.script_tree.setAcceptDrops(True)
+        self.script_tree.setDropIndicatorShown(True)
+        self.script_tree.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self.script_tree.itemChanged.connect(self.on_script_tree_item_changed)
         self.script_tree.itemDoubleClicked.connect(self.on_script_tree_item_double_clicked)
         self.script_tree.currentItemChanged.connect(self.on_script_tree_current_item_changed)
+        self.script_tree.order_changed.connect(self.on_script_tree_order_changed)
+        self.script_tree.replace_action_requested.connect(self.on_replace_action_requested)
         layout.addWidget(self.script_tree)
         
         # Buttons layout
@@ -599,6 +648,8 @@ class MainWindow(QMainWindow):
                     Qt.ItemFlag.ItemIsEnabled
                     | Qt.ItemFlag.ItemIsSelectable
                     | Qt.ItemFlag.ItemIsUserCheckable
+                    | Qt.ItemFlag.ItemIsDragEnabled
+                    | Qt.ItemFlag.ItemIsDropEnabled
                 )
                 group_item.setCheckState(
                     0,
@@ -618,6 +669,8 @@ class MainWindow(QMainWindow):
                         Qt.ItemFlag.ItemIsEnabled
                         | Qt.ItemFlag.ItemIsSelectable
                         | Qt.ItemFlag.ItemIsUserCheckable
+                        | Qt.ItemFlag.ItemIsDragEnabled
+                        # | Qt.ItemFlag.ItemIsDropEnabled
                     )
                     action_item.setCheckState(
                         0,
@@ -1229,7 +1282,129 @@ class MainWindow(QMainWindow):
             self._last_selected_branch_index = int(payload[1])
         elif payload[0] == "action":
             self._last_selected_branch_index = int(payload[1])
-    
+
+    def on_script_tree_order_changed(self):
+        """Handle drag-drop reorder and sync tree order back to script data."""
+        if self._updating_table:
+            return
+        if self.auto_clicker.is_running:
+            self.statusBar.showMessage("Cannot reorder actions while running")
+            self.update_table()
+            return
+        self._rebuild_groups_from_tree()
+        self.update_table()
+        self.statusBar.showMessage("Action order updated")
+
+    def on_replace_action_requested(self, source_payload, target_payload):
+        """Handle confirmed replace action (drag source on top of target action)."""
+        if self.auto_clicker.is_running:
+            self.statusBar.showMessage("Cannot replace actions while running")
+            self.update_table()
+            return
+
+        try:
+            src_gi, src_ai = int(source_payload[1]), int(source_payload[2])
+            tgt_gi, tgt_ai = int(target_payload[1]), int(target_payload[2])
+        except Exception:
+            return
+        if src_gi == tgt_gi and src_ai == tgt_ai:
+            return
+        if src_gi < 0 or src_gi >= len(self.script_groups):
+            return
+        if tgt_gi < 0 or tgt_gi >= len(self.script_groups):
+            return
+
+        src_actions = self.script_groups[src_gi].get("actions", [])
+        tgt_actions = self.script_groups[tgt_gi].get("actions", [])
+        if src_ai < 0 or src_ai >= len(src_actions):
+            return
+        if tgt_ai < 0 or tgt_ai >= len(tgt_actions):
+            return
+
+        action_id_to_count = {}
+        for gi, group in enumerate(self.script_groups):
+            for ai, entry in enumerate(group.get("actions", [])):
+                action_obj = entry.get("action")
+                if action_obj is None:
+                    continue
+                action_id_to_count[id(action_obj)] = int(self.action_counts.get((gi, ai), 0))
+
+        # Replace target with source entry.
+        # Move source entry to target slot and remove one row (replace semantics).
+        moved_entry = src_actions.pop(src_ai)
+        if src_gi == tgt_gi and src_ai < tgt_ai:
+            tgt_ai -= 1
+        tgt_actions[tgt_ai] = moved_entry
+
+        # Rebuild count map for new indexes.
+        new_counts = {}
+        for gi, group in enumerate(self.script_groups):
+            for ai, entry in enumerate(group.get("actions", [])):
+                action_obj = entry.get("action")
+                new_counts[(gi, ai)] = int(action_id_to_count.get(id(action_obj), 0))
+        self.action_counts = new_counts
+
+        # self._reset_action_counts()
+        self._last_selected_branch_index = tgt_gi
+        self.update_table()
+        self.statusBar.showMessage("Action replaced")
+
+    def _rebuild_groups_from_tree(self):
+        """Rebuild script_groups based on current tree visual order."""
+        old_groups = self.script_groups
+        old_counts = self.action_counts.copy()
+        new_groups: list[dict] = []
+        new_counts: dict[tuple[int, int], int] = {}
+        selected_branch = None
+
+        for new_gi in range(self.script_tree.topLevelItemCount()):
+            group_item = self.script_tree.topLevelItem(new_gi)
+            payload = group_item.data(0, Qt.ItemDataRole.UserRole)
+            old_gi = int(payload[1]) if payload and payload[0] == "group" else -1
+            old_group = old_groups[old_gi] if 0 <= old_gi < len(old_groups) else {"actions": []}
+            group_name = (group_item.text(0) or f"Branch {new_gi + 1}").strip() or f"Branch {new_gi + 1}"
+            group_enabled = group_item.checkState(0) != Qt.CheckState.Unchecked
+
+            actions = []
+            for new_ai in range(group_item.childCount()):
+                action_item = group_item.child(new_ai)
+                a_payload = action_item.data(0, Qt.ItemDataRole.UserRole)
+                if not a_payload or a_payload[0] != "action":
+                    continue
+                src_gi = int(a_payload[1])
+                src_ai = int(a_payload[2])
+                if src_gi < 0 or src_gi >= len(old_groups):
+                    continue
+                src_actions = old_groups[src_gi].get("actions", [])
+                if src_ai < 0 or src_ai >= len(src_actions):
+                    continue
+                src_entry = src_actions[src_ai]
+                action_obj = src_entry.get("action")
+                if not isinstance(action_obj, ClickAction):
+                    continue
+                new_entry = {
+                    "name": (action_item.text(0) or src_entry.get("name", f"Action {new_ai + 1}")).strip() or f"Action {new_ai + 1}",
+                    "enabled": action_item.checkState(0) == Qt.CheckState.Checked,
+                    "action": action_obj,
+                }
+                actions.append(new_entry)
+                new_counts[(new_gi, new_ai)] = int(old_counts.get((src_gi, src_ai), 0))
+
+            new_groups.append({
+                "name": group_name,
+                "enabled": bool(group_enabled),
+                "actions": actions
+            })
+            if group_item is self.script_tree.currentItem() or (
+                self.script_tree.currentItem() and self.script_tree.currentItem().parent() is group_item
+            ):
+                selected_branch = new_gi
+
+        self.script_groups = new_groups if new_groups else [{"name": "Branch 1", "enabled": True, "actions": []}]
+        self.action_counts = new_counts
+        if selected_branch is not None:
+            self._last_selected_branch_index = int(selected_branch)
+   
     def _on_delay_spin_changed(self, group_index: int, action_index: int, value: int):
         """Handle delay changes from per-action spinbox."""
         if self._updating_table:
