@@ -4,7 +4,7 @@ setlocal
 REM ITM AutoClicker build script
 REM Update this version for each release
 set APP_NAME=ITM_AutoClicker
-set APP_VERSION=1.0.2
+set APP_VERSION=1.0.3
 set ENTRYPOINT=main.py
 
 echo ========================================
@@ -37,7 +37,9 @@ echo.
 echo [3/4] Building one-file executable...
 %PYTHON% -m PyInstaller --noconfirm --clean --onefile --windowed ^
   --name "%APP_NAME%" ^
+  --icon "resource\Icon.ico" ^
   --add-data "qt.conf;." ^
+  --add-data "resource;resource" ^
   "%ENTRYPOINT%"
 if errorlevel 1 (
     echo ERROR: Build failed.
