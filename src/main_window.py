@@ -330,6 +330,10 @@ class MainWindow(QMainWindow):
         self._last_selected_branch_index: int | None = None
         self.selected_target_window: Window | None = None
         self.target_info_label = None
+        self.target_x_spin: QSpinBox | None = None
+        self.target_y_spin: QSpinBox | None = None
+        self.target_w_spin: QSpinBox | None = None
+        self.target_h_spin: QSpinBox | None = None
         self._updating_table = False
         self.action_executed_signal.connect(self._on_action_executed_main_thread)
         self._ensure_default_group()
@@ -385,6 +389,44 @@ class MainWindow(QMainWindow):
         target_layout.addStretch()
         target_layout.addWidget(btn_select_target)
         layout.addLayout(target_layout)
+
+        # Target geometry controls
+        target_geo_layout = QHBoxLayout()
+        target_geo_layout.addWidget(QLabel("X:"))
+        self.target_x_spin = QSpinBox()
+        self.target_x_spin.setRange(-10000, 10000)
+        self.target_x_spin.setToolTip("Target window left position")
+        target_geo_layout.addWidget(self.target_x_spin)
+
+        target_geo_layout.addWidget(QLabel("Y:"))
+        self.target_y_spin = QSpinBox()
+        self.target_y_spin.setRange(-10000, 10000)
+        self.target_y_spin.setToolTip("Target window top position")
+        target_geo_layout.addWidget(self.target_y_spin)
+
+        target_geo_layout.addWidget(QLabel("W:"))
+        self.target_w_spin = QSpinBox()
+        self.target_w_spin.setRange(100, 10000)
+        self.target_w_spin.setToolTip("Target window width")
+        target_geo_layout.addWidget(self.target_w_spin)
+
+        target_geo_layout.addWidget(QLabel("H:"))
+        self.target_h_spin = QSpinBox()
+        self.target_h_spin.setRange(100, 10000)
+        self.target_h_spin.setToolTip("Target window height")
+        target_geo_layout.addWidget(self.target_h_spin)
+
+        btn_refresh_target_rect = QPushButton("Refresh Rect")
+        btn_refresh_target_rect.clicked.connect(self.on_refresh_target_geometry)
+        btn_refresh_target_rect.setToolTip("Read current target window position/size into X/Y/W/H fields.")
+        target_geo_layout.addWidget(btn_refresh_target_rect)
+
+        btn_fix_target_rect = QPushButton("Fix")
+        btn_fix_target_rect.clicked.connect(self.on_fix_target_geometry)
+        btn_fix_target_rect.setToolTip("Apply X/Y/W/H fields to target window.")
+        target_geo_layout.addWidget(btn_fix_target_rect)
+        target_geo_layout.addStretch()
+        layout.addLayout(target_geo_layout)
         
         # Title
         title = QLabel("Click Script List")
@@ -1860,7 +1902,11 @@ class MainWindow(QMainWindow):
                     "action": action.to_dict()
                 })
             groups.append(group_payload)
-        return {"version": "2.0", "groups": groups}
+        payload = {"version": "2.1", "groups": groups}
+        target_payload = self._build_target_window_payload()
+        if target_payload:
+            payload["target_window"] = target_payload
+        return payload
     
     def _load_grouped_script_data(self, data: dict):
         """Load grouped script structure with backward compatibility."""
@@ -1896,6 +1942,7 @@ class MainWindow(QMainWindow):
         
         self.script_groups = loaded_groups
         self._ensure_default_group()
+        self._load_target_window_payload(data if isinstance(data, dict) else {})
     
     def _build_action_details(self, action: ClickAction) -> str:
         """Build details text for one action."""
@@ -1991,6 +2038,7 @@ class MainWindow(QMainWindow):
             return
         
         self.selected_target_window = selected
+        self.on_refresh_target_geometry()
         self._update_target_label()
         self.statusBar.showMessage(f"Target selected: {selected.title}")
     
@@ -2000,7 +2048,12 @@ class MainWindow(QMainWindow):
             return
         
         if self.selected_target_window:
-            self.target_info_label.setText(f"{self.selected_target_window.title} (hwnd={self.selected_target_window.hwnd})")
+            info = f"{self.selected_target_window.title} (hwnd={self.selected_target_window.hwnd})"
+            rect = self._get_target_window_rect()
+            if rect:
+                x, y, w, h = rect
+                info += f" [{x}, {y}, {w}x{h}]"
+            self.target_info_label.setText(info)
         else:
             self.target_info_label.setText("Not selected")
     
@@ -2019,6 +2072,129 @@ class MainWindow(QMainWindow):
         
         self.on_select_target_window()
         return self.selected_target_window is not None
+
+    def _get_target_window_rect(self) -> tuple[int, int, int, int] | None:
+        """Get target window rect as (x, y, w, h)."""
+        if not self.selected_target_window:
+            return None
+        try:
+            hwnd = int(self.selected_target_window.hwnd)
+            if not win32gui.IsWindow(hwnd):
+                return None
+            left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+            width = max(0, int(right - left))
+            height = max(0, int(bottom - top))
+            return int(left), int(top), int(width), int(height)
+        except Exception:
+            return None
+
+    def on_refresh_target_geometry(self):
+        """Read current target window geometry into X/Y/W/H controls."""
+        rect = self._get_target_window_rect()
+        if not rect:
+            self.statusBar.showMessage("Cannot read target geometry. Please select a valid target window.")
+            return
+        x, y, w, h = rect
+        if self.target_x_spin:
+            self.target_x_spin.setValue(int(x))
+        if self.target_y_spin:
+            self.target_y_spin.setValue(int(y))
+        if self.target_w_spin:
+            self.target_w_spin.setValue(int(w))
+        if self.target_h_spin:
+            self.target_h_spin.setValue(int(h))
+        self._update_target_label()
+        self.statusBar.showMessage(f"Target geometry refreshed: ({x}, {y}, {w}x{h})")
+
+    def on_fix_target_geometry(self):
+        """Apply X/Y/W/H controls to target window."""
+        if not self.selected_target_window:
+            self.statusBar.showMessage("Please select target window first.")
+            return
+        try:
+            hwnd = int(self.selected_target_window.hwnd)
+            if not win32gui.IsWindow(hwnd):
+                self.statusBar.showMessage("Selected target is no longer valid. Please reselect.")
+                return
+
+            x = int(self.target_x_spin.value()) if self.target_x_spin else 0
+            y = int(self.target_y_spin.value()) if self.target_y_spin else 0
+            w = int(self.target_w_spin.value()) if self.target_w_spin else 800
+            h = int(self.target_h_spin.value()) if self.target_h_spin else 600
+            w = max(100, w)
+            h = max(100, h)
+
+            win32gui.MoveWindow(hwnd, x, y, w, h, True)
+            self.on_refresh_target_geometry()
+            self.statusBar.showMessage(f"Target window fixed to ({x}, {y}, {w}x{h})")
+        except Exception as e:
+            QMessageBox.warning(self, "Fix Target Failed", f"Unable to move/resize target window:\n{e}")
+
+    def _build_target_window_payload(self) -> dict | None:
+        """Build target-window metadata for script save."""
+        if not self.selected_target_window:
+            return None
+        payload = {
+            "hwnd": int(self.selected_target_window.hwnd),
+            "title": str(self.selected_target_window.title or ""),
+        }
+        if self.target_x_spin and self.target_y_spin and self.target_w_spin and self.target_h_spin:
+            payload.update({
+                "x": int(self.target_x_spin.value()),
+                "y": int(self.target_y_spin.value()),
+                "width": int(self.target_w_spin.value()),
+                "height": int(self.target_h_spin.value()),
+            })
+        else:
+            rect = self._get_target_window_rect()
+            if rect:
+                x, y, w, h = rect
+                payload.update({"x": x, "y": y, "width": w, "height": h})
+        return payload
+
+    def _load_target_window_payload(self, data: dict):
+        """Restore target-window metadata from loaded script."""
+        target_data = data.get("target_window") if isinstance(data, dict) else None
+        if not isinstance(target_data, dict):
+            return
+
+        hwnd = target_data.get("hwnd")
+        title = str(target_data.get("title", ""))
+        restored_window = None
+        try:
+            if hwnd is not None and win32gui.IsWindow(int(hwnd)):
+                class_name = win32gui.GetClassName(int(hwnd))
+                live_title = win32gui.GetWindowText(int(hwnd)) or title
+                restored_window = Window(int(hwnd), live_title, class_name)
+        except Exception:
+            restored_window = None
+
+        if restored_window:
+            self.selected_target_window = restored_window
+        elif title or hwnd is not None:
+            # Keep UI informative even if old hwnd is no longer valid.
+            try:
+                self.selected_target_window = Window(int(hwnd or 0), title or "Saved target", "")
+            except Exception:
+                self.selected_target_window = None
+
+        try:
+            if self.target_x_spin and "x" in target_data:
+                self.target_x_spin.setValue(int(target_data.get("x", 0)))
+            if self.target_y_spin and "y" in target_data:
+                self.target_y_spin.setValue(int(target_data.get("y", 0)))
+            if self.target_w_spin and "width" in target_data:
+                self.target_w_spin.setValue(max(100, int(target_data.get("width", 100))))
+            if self.target_h_spin and "height" in target_data:
+                self.target_h_spin.setValue(max(100, int(target_data.get("height", 100))))
+        except Exception:
+            pass
+
+        self._update_target_label()
+        if restored_window:
+            self.statusBar.showMessage(f"Loaded target metadata: {restored_window.title}")
+        else:
+            self.statusBar.showMessage("Loaded target geometry from script. Please reselect target window if needed.")
     
     def _apply_selected_target_to_actions(self):
         """Apply selected target to all actions before Start."""
