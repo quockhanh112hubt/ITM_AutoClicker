@@ -385,9 +385,17 @@ class MainWindow(QMainWindow):
         btn_select_target = QPushButton("Select Target")
         btn_select_target.clicked.connect(self.on_select_target_window)
         btn_select_target.setToolTip("Choose the target window for recording and execution.")
+        btn_load_top = QPushButton("Load Script")
+        btn_load_top.clicked.connect(self.on_load_script)
+        btn_load_top.setToolTip("Load script from JSON file.")
+        btn_save_top = QPushButton("Save Script")
+        btn_save_top.clicked.connect(self.on_save_script)
+        btn_save_top.setToolTip("Save current script list to JSON file.")
         target_layout.addWidget(target_title)
         target_layout.addWidget(self.target_info_label)
         target_layout.addStretch()
+        target_layout.addWidget(btn_load_top)
+        target_layout.addWidget(btn_save_top)
         target_layout.addWidget(btn_select_target)
         layout.addLayout(target_layout)
 
@@ -540,39 +548,6 @@ class MainWindow(QMainWindow):
         self.script_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.script_tree.customContextMenuRequested.connect(self.on_script_tree_context_menu_requested)
         layout.addWidget(self.script_tree)
-        
-        # Buttons layout
-        button_layout = QHBoxLayout()
-        
-        btn_add_group = QPushButton("Add Branch")
-        btn_add_group.clicked.connect(self.on_add_branch)
-        btn_add_group.setToolTip("Create a new branch (group) to organize actions.")
-        button_layout.addWidget(btn_add_group)
-        
-        btn_rename = QPushButton("Rename")
-        btn_rename.clicked.connect(self.on_rename_selected)
-        btn_rename.setToolTip("Rename selected branch/action. You can also double-click the name.")
-        button_layout.addWidget(btn_rename)
-        
-        # Clear button
-        btn_clear = QPushButton("Clear All")
-        btn_clear.clicked.connect(self.on_clear_all)
-        btn_clear.setToolTip("Clear all branches and actions in current list.")
-        button_layout.addWidget(btn_clear)
-        
-        # Load button
-        btn_load = QPushButton("Load Script")
-        btn_load.clicked.connect(self.on_load_script)
-        btn_load.setToolTip("Load script from JSON file.")
-        button_layout.addWidget(btn_load)
-        
-        # Save button
-        btn_save = QPushButton("Save Script")
-        btn_save.clicked.connect(self.on_save_script)
-        btn_save.setToolTip("Save current script list to JSON file.")
-        button_layout.addWidget(btn_save)
-        
-        layout.addLayout(button_layout)
         
         tab.setLayout(layout)
         return tab
@@ -1172,15 +1147,31 @@ class MainWindow(QMainWindow):
     def on_script_tree_context_menu_requested(self, pos):
         """Show right-click context menu for selected tree item."""
         item = self.script_tree.itemAt(pos)
-        if item is None:
-            return
-        self.script_tree.setCurrentItem(item)
+        if item is not None:
+            self.script_tree.setCurrentItem(item)
 
         menu = QMenu(self)
+        add_branch_action = menu.addAction("Add Branch")
+        rename_action = menu.addAction("Rename")
         delete_action = menu.addAction("Delete")
+        menu.addSeparator()
+        clear_all_action = menu.addAction("Clear All")
+
+        rename_action.setEnabled(item is not None)
+        delete_action.setEnabled(item is not None)
+
         chosen = menu.exec(self.script_tree.viewport().mapToGlobal(pos))
+        if chosen == add_branch_action:
+            self.on_add_branch()
+            return
+        if chosen == rename_action:
+            self.on_rename_selected()
+            return
         if chosen == delete_action:
             self.on_delete_selected_item()
+            return
+        if chosen == clear_all_action:
+            self.on_clear_all()
     
     def on_rename_selected(self):
         """Rename currently selected branch/action."""
