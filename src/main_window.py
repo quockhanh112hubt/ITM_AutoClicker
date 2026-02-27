@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QTabWidget,
     QLabel, QSpinBox, QFileDialog, QMessageBox, QDialog,
     QDialogButtonBox, QRadioButton, QButtonGroup, QStatusBar,
-    QComboBox, QTreeWidget, QTreeWidgetItem, QInputDialog, QToolButton, QCheckBox,
+    QComboBox, QTreeWidget, QTreeWidgetItem, QInputDialog, QToolButton, QCheckBox, QMenu,
     QAbstractItemView
 )
 from PyQt6.QtCore import Qt, pyqtSignal
@@ -537,6 +537,8 @@ class MainWindow(QMainWindow):
         self.script_tree.currentItemChanged.connect(self.on_script_tree_current_item_changed)
         self.script_tree.order_changed.connect(self.on_script_tree_order_changed)
         self.script_tree.replace_action_requested.connect(self.on_replace_action_requested)
+        self.script_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.script_tree.customContextMenuRequested.connect(self.on_script_tree_context_menu_requested)
         layout.addWidget(self.script_tree)
         
         # Buttons layout
@@ -546,12 +548,6 @@ class MainWindow(QMainWindow):
         btn_add_group.clicked.connect(self.on_add_branch)
         btn_add_group.setToolTip("Create a new branch (group) to organize actions.")
         button_layout.addWidget(btn_add_group)
-        
-        # Remove button
-        btn_remove = QPushButton("Remove Selected")
-        btn_remove.clicked.connect(self.on_remove_action)
-        btn_remove.setToolTip("Remove checked actions first. If none checked, remove checked branch(es).")
-        button_layout.addWidget(btn_remove)
         
         btn_rename = QPushButton("Rename")
         btn_rename.clicked.connect(self.on_rename_selected)
@@ -1127,50 +1123,11 @@ class MainWindow(QMainWindow):
         self._release_active_action_tool_button()
 
     
-    def on_remove_action(self):
-        """Handle remove selected branch/action"""
-        checked_actions = []
-        checked_groups = []
-        
-        for gi, group in enumerate(self.script_groups):
-            group_item_checked = False
-            group_item = self.script_tree.topLevelItem(gi)
-            if group_item:
-                group_item_checked = group_item.checkState(0) == Qt.CheckState.Checked
-            if group_item_checked:
-                checked_groups.append(gi)
-            
-            for ai, entry in enumerate(group.get("actions", [])):
-                if bool(entry.get("enabled", True)):
-                    checked_actions.append((gi, ai))
-        
-        # Prefer removing checked actions first (avoid accidental group delete).
-        if checked_actions:
-            by_group: dict[int, list[int]] = {}
-            for gi, ai in checked_actions:
-                by_group.setdefault(gi, []).append(ai)
-            for gi, indexes in by_group.items():
-                indexes.sort(reverse=True)
-                actions = self.script_groups[gi].get("actions", [])
-                for ai in indexes:
-                    if 0 <= ai < len(actions):
-                        actions.pop(ai)
-            self.update_table()
-            self.statusBar.showMessage(f"Removed {len(checked_actions)} action(s)")
-            return
-        
-        if checked_groups:
-            for gi in sorted(checked_groups, reverse=True):
-                if 0 <= gi < len(self.script_groups):
-                    self.script_groups.pop(gi)
-            self._ensure_default_group()
-            self.update_table()
-            self.statusBar.showMessage(f"Removed {len(checked_groups)} branch(es)")
-            return
-        
+    def on_delete_selected_item(self):
+        """Delete currently selected branch/action (selection-based, not checkbox-based)."""
         current_item = self.script_tree.currentItem()
         if not current_item:
-            self.statusBar.showMessage("Tick action/branch or select one item to remove")
+            self.statusBar.showMessage("Select a branch or action to delete")
             return
         
         payload = current_item.data(0, Qt.ItemDataRole.UserRole)
@@ -1192,9 +1149,38 @@ class MainWindow(QMainWindow):
             if 0 <= group_index < len(self.script_groups):
                 actions = self.script_groups[group_index].get("actions", [])
                 if 0 <= action_index < len(actions):
-                    actions.pop(action_index)
+                    entry = actions[action_index]
+                    action_id = entry.get("id")
+                    if action_id:
+                        # Remove selected action and all its descendants in this branch.
+                        remove_ids = {str(action_id)}
+                        changed = True
+                        while changed:
+                            changed = False
+                            for e in actions:
+                                pid = e.get("parent_id")
+                                eid = e.get("id")
+                                if pid and eid and str(pid) in remove_ids and str(eid) not in remove_ids:
+                                    remove_ids.add(str(eid))
+                                    changed = True
+                        actions[:] = [e for e in actions if str(e.get("id")) not in remove_ids]
+                    else:
+                        actions.pop(action_index)
                     self.update_table()
                     self.statusBar.showMessage("Action removed")
+
+    def on_script_tree_context_menu_requested(self, pos):
+        """Show right-click context menu for selected tree item."""
+        item = self.script_tree.itemAt(pos)
+        if item is None:
+            return
+        self.script_tree.setCurrentItem(item)
+
+        menu = QMenu(self)
+        delete_action = menu.addAction("Delete")
+        chosen = menu.exec(self.script_tree.viewport().mapToGlobal(pos))
+        if chosen == delete_action:
+            self.on_delete_selected_item()
     
     def on_rename_selected(self):
         """Rename currently selected branch/action."""
