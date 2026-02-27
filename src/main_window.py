@@ -212,6 +212,7 @@ class ScriptTreeWidget(QTreeWidget):
         source_item = self.currentItem()
         source_payload = source_item.data(0, Qt.ItemDataRole.UserRole) if source_item else None
         target_payload = target_item.data(0, Qt.ItemDataRole.UserRole) if target_item else None
+        indicator = self.dropIndicatorPosition()
 
         # Prevent branch-over-branch "OnItem" drops because Qt may interpret it as nesting,
         # which can hide/remove one top-level branch after rebuild.
@@ -219,7 +220,7 @@ class ScriptTreeWidget(QTreeWidget):
             source_payload
             and isinstance(source_payload, tuple)
             and source_payload[0] == "group"
-            and self.dropIndicatorPosition() == QAbstractItemView.DropIndicatorPosition.OnItem
+            and indicator == QAbstractItemView.DropIndicatorPosition.OnItem
         ):
             event.ignore()
             return
@@ -240,7 +241,17 @@ class ScriptTreeWidget(QTreeWidget):
             source_payload and target_payload
             and isinstance(source_payload, tuple) and isinstance(target_payload, tuple)
             and source_payload[0] == "action" and target_payload[0] == "group"
-            and self.dropIndicatorPosition() != QAbstractItemView.DropIndicatorPosition.OnItem
+            and indicator != QAbstractItemView.DropIndicatorPosition.OnItem
+        ):
+            event.ignore()
+            return
+
+        # For action drags, block ambiguous/non-item drops (often branch gaps/viewport).
+        if (
+            source_payload
+            and isinstance(source_payload, tuple)
+            and source_payload[0] == "action"
+            and not target_payload
         ):
             event.ignore()
             return
@@ -251,7 +262,7 @@ class ScriptTreeWidget(QTreeWidget):
             and len(source_payload) >= 3 and len(target_payload) >= 3
             and source_payload[0] == "action" and target_payload[0] == "action"
             and source_payload != target_payload
-            and self.dropIndicatorPosition() == QAbstractItemView.DropIndicatorPosition.OnItem
+            and indicator == QAbstractItemView.DropIndicatorPosition.OnItem
         ):
             reply = QMessageBox.question(
                 self,
