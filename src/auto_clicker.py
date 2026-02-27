@@ -42,6 +42,7 @@ class AutoClicker:
         self._on_status_changed: Optional[Callable] = None
         self._on_action_executed: Optional[Callable] = None
         self._priority_last_trigger_at = {}
+        self._action_execution_totals = {}
     
     def set_delay(self, delay_ms: int):
         """Set delay between clicks"""
@@ -93,6 +94,7 @@ class AutoClicker:
         self.current_script = script
         self.is_running = True
         self._priority_last_trigger_at.clear()
+        self._action_execution_totals.clear()
         self._notify_status("Starting auto click...")
         
         self._execution_thread = threading.Thread(target=self._execute_loop, daemon=True)
@@ -118,6 +120,12 @@ class AutoClicker:
                 break
             
             try:
+                if not self._can_execute_by_limit(action_index, action):
+                    executed_by_index[action_index] = False
+                    time.sleep(self._get_action_delay_ms(action) / 1000.0)
+                    self._execute_priority_actions()
+                    continue
+
                 parent_runtime_index = action.data.get("__parent_runtime_index")
                 if parent_runtime_index is not None:
                     try:
@@ -138,6 +146,7 @@ class AutoClicker:
                 executed_by_index[action_index] = bool(executed)
                 
                 if executed:
+                    self._action_execution_totals[action_index] = int(self._action_execution_totals.get(action_index, 0)) + 1
                     self._notify_action_executed(action_index)
                 
                 if not self.is_running:
@@ -174,6 +183,8 @@ class AutoClicker:
         for level, idx, action in candidates:
             if not self.is_running:
                 break
+            if not self._can_execute_by_limit(idx, action):
+                continue
             
             now = time.time()
             last = self._priority_last_trigger_at.get(idx, 0.0)
@@ -186,6 +197,7 @@ class AutoClicker:
                 else:
                     executed = self._execute_image_click(action)
                 if executed:
+                    self._action_execution_totals[idx] = int(self._action_execution_totals.get(idx, 0)) + 1
                     self._notify_action_executed(idx)
                     self._priority_last_trigger_at[idx] = time.time()
                     clicked_count += 1
@@ -193,6 +205,18 @@ class AutoClicker:
         
         if clicked_count > 0:
             self._notify_status(f"Priority handled: {clicked_count} action(s). Resume normal sequence.")
+
+    def _can_execute_by_limit(self, action_index: int, action: ClickAction) -> bool:
+        """Check execution-limit metadata for one runtime action."""
+        max_exec = action.data.get("__max_executions")
+        if max_exec is None:
+            return True
+        try:
+            max_exec_int = max(1, int(max_exec))
+        except Exception:
+            return True
+        done = int(self._action_execution_totals.get(int(action_index), 0))
+        return done < max_exec_int
     
     def _get_action_delay_ms(self, action: ClickAction) -> int:
         """Return per-action delay in ms, fallback to global delay."""

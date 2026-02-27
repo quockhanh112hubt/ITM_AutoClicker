@@ -525,15 +525,16 @@ class MainWindow(QMainWindow):
         
         # Tree list for script branches/actions
         self.script_tree = ScriptTreeWidget()
-        self.script_tree.setColumnCount(7)
-        self.script_tree.setHeaderLabels(["Click Script List", "Type", "Image", "Priority", "Delay (ms)", "Count", "Details"])
+        self.script_tree.setColumnCount(8)
+        self.script_tree.setHeaderLabels(["Click Script List", "Type", "Image", "Priority", "Delay (ms)", "Limit", "Count", "Details"])
         self.script_tree.setColumnWidth(0, 220)
         self.script_tree.setColumnWidth(1, 110)
         self.script_tree.setColumnWidth(2, 110)
         self.script_tree.setColumnWidth(3, 90)
         self.script_tree.setColumnWidth(4, 90)
-        self.script_tree.setColumnWidth(5, 80)
-        self.script_tree.setColumnWidth(6, 360)
+        self.script_tree.setColumnWidth(5, 90)
+        self.script_tree.setColumnWidth(6, 80)
+        self.script_tree.setColumnWidth(7, 340)
         self.script_tree.setEditTriggers(QTreeWidget.EditTrigger.NoEditTriggers)
         self.script_tree.setDragEnabled(True)
         self.script_tree.viewport().setAcceptDrops(True)
@@ -700,7 +701,7 @@ class MainWindow(QMainWindow):
             for group_index, group in enumerate(self.script_groups):
                 group_item = QTreeWidgetItem(self.script_tree)
                 group_item.setText(0, group.get("name", f"Branch {group_index + 1}"))
-                group_item.setText(6, f"{len(group.get('actions', []))} action(s)")
+                group_item.setText(7, f"{len(group.get('actions', []))} action(s)")
                 group_item.setFlags(
                     Qt.ItemFlag.ItemIsEnabled
                     | Qt.ItemFlag.ItemIsSelectable
@@ -734,6 +735,8 @@ class MainWindow(QMainWindow):
                         return
                     visited.add(action_index)
                     entry = actions[action_index]
+                    if "max_executions" not in entry:
+                        entry["max_executions"] = None
                     action = entry.get("action")
                     if not isinstance(action, ClickAction):
                         return
@@ -789,9 +792,23 @@ class MainWindow(QMainWindow):
                     )
                     self.script_tree.setItemWidget(action_item, 4, delay_spin)
 
-                    action_item.setText(5, str(int(self.action_counts.get(key, 0))))
-                    action_item.setTextAlignment(5, Qt.AlignmentFlag.AlignCenter)
-                    action_item.setText(6, self._build_action_details(action))
+                    limit_spin = QSpinBox()
+                    limit_spin.setMinimum(0)
+                    limit_spin.setMaximum(1000000)
+                    limit_spin.setSpecialValueText("Unlimited")
+                    max_exec = entry.get("max_executions")
+                    if max_exec is None:
+                        limit_spin.setValue(0)
+                    else:
+                        limit_spin.setValue(max(1, int(max_exec)))
+                    limit_spin.valueChanged.connect(
+                        lambda value, g=group_index, a=action_index: self._on_limit_spin_changed(g, a, value)
+                    )
+                    self.script_tree.setItemWidget(action_item, 5, limit_spin)
+
+                    action_item.setText(6, str(int(self.action_counts.get(key, 0))))
+                    action_item.setTextAlignment(6, Qt.AlignmentFlag.AlignCenter)
+                    action_item.setText(7, self._build_action_details(action))
                     self._tree_action_items[key] = action_item
 
                     for child_index in action_children.get(entry.get("id"), []):
@@ -1476,6 +1493,7 @@ class MainWindow(QMainWindow):
                     new_entry = {
                         "id": entry_id,
                         "parent_id": parent_action_id,
+                        "max_executions": src_entry.get("max_executions"),
                         "name": (action_item.text(0) or src_entry.get("name", f"Action {new_ai + 1}")).strip() or f"Action {new_ai + 1}",
                         "enabled": action_item.checkState(0) == Qt.CheckState.Checked,
                         "action": action_obj,
@@ -1515,6 +1533,19 @@ class MainWindow(QMainWindow):
         if not isinstance(action, ClickAction):
             return
         action.data["delay_ms"] = max(0, int(value))
+
+    def _on_limit_spin_changed(self, group_index: int, action_index: int, value: int):
+        """Handle execution limit changes from per-action spinbox."""
+        if self._updating_table:
+            return
+        if group_index < 0 or group_index >= len(self.script_groups):
+            return
+        actions = self.script_groups[group_index].get("actions", [])
+        if action_index < 0 or action_index >= len(actions):
+            return
+        entry = actions[action_index]
+        # 0 = Unlimited (specialValueText); >=1 = hard limit.
+        entry["max_executions"] = None if int(value) <= 0 else int(value)
     
     def _build_hotkey_options(self) -> list[str]:
         """Build available key options for hotkey combo boxes."""
@@ -1874,6 +1905,7 @@ class MainWindow(QMainWindow):
         actions.append({
             "id": uuid.uuid4().hex,
             "parent_id": None,
+            "max_executions": None,
             "name": f"Action {len(actions) + 1}",
             "enabled": True,
             "action": action
@@ -1917,6 +1949,12 @@ class MainWindow(QMainWindow):
                 runtime_action = ClickAction.from_dict(action.to_dict())
                 if parent_runtime_index is not None:
                     runtime_action.data["__parent_runtime_index"] = int(parent_runtime_index)
+                max_exec = entry.get("max_executions")
+                if max_exec is not None:
+                    try:
+                        runtime_action.data["__max_executions"] = max(1, int(max_exec))
+                    except Exception:
+                        pass
                 runtime_index = len(script.get_actions())
                 script.add_action(runtime_action)
                 key_map.append((group_index, action_index))
@@ -1946,6 +1984,7 @@ class MainWindow(QMainWindow):
                 group_payload["actions"].append({
                     "id": str(entry.get("id", uuid.uuid4().hex)),
                     "parent_id": entry.get("parent_id"),
+                    "max_executions": entry.get("max_executions"),
                     "name": str(entry.get("name", "Action")),
                     "enabled": bool(entry.get("enabled", True)),
                     "action": action.to_dict()
@@ -1977,6 +2016,7 @@ class MainWindow(QMainWindow):
                     actions.append({
                         "id": str(entry.get("id") or uuid.uuid4().hex),
                         "parent_id": entry.get("parent_id"),
+                        "max_executions": entry.get("max_executions"),
                         "name": str(entry.get("name", f"Action {len(actions) + 1}")),
                         "enabled": bool(entry.get("enabled", True)),
                         "action": action
@@ -1989,6 +2029,7 @@ class MainWindow(QMainWindow):
                 {
                     "id": uuid.uuid4().hex,
                     "parent_id": None,
+                    "max_executions": None,
                     "name": f"Action {idx + 1}",
                     "enabled": True,
                     "action": action
@@ -2059,7 +2100,7 @@ class MainWindow(QMainWindow):
         
         self._updating_table = True
         try:
-            item.setText(5, str(int(self.action_counts.get(key, 0))))
+            item.setText(6, str(int(self.action_counts.get(key, 0))))
         finally:
             self._updating_table = False
     
