@@ -4,6 +4,7 @@ Main GUI for ITM AutoClicker
 import sys
 import os
 import json
+import uuid
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTabWidget,
@@ -266,8 +267,8 @@ class ScriptTreeWidget(QTreeWidget):
         ):
             reply = QMessageBox.question(
                 self,
-                "Confirm Replace",
-                "Replace target action with dragged action?",
+                "Set Parent Action",
+                "Make dragged action a child of target action?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             )
             if reply == QMessageBox.StandardButton.Yes:
@@ -741,21 +742,40 @@ class MainWindow(QMainWindow):
                     Qt.CheckState.Checked if group.get("enabled", True) else Qt.CheckState.Unchecked
                 )
                 group_item.setData(0, Qt.ItemDataRole.UserRole, ("group", group_index))
-                
-                for action_index, entry in enumerate(group.get("actions", [])):
+
+                actions = group.get("actions", [])
+                for entry in actions:
+                    if not entry.get("id"):
+                        entry["id"] = uuid.uuid4().hex
+
+                action_children: dict[str | None, list[int]] = {}
+                for action_index, entry in enumerate(actions):
+                    parent_id = entry.get("parent_id")
+                    if not parent_id or not any(x.get("id") == parent_id for x in actions):
+                        parent_id = None
+                        entry["parent_id"] = None
+                    action_children.setdefault(parent_id, []).append(action_index)
+
+                visited = set()
+
+                def add_action_node(action_index: int, parent_tree_item):
+                    if action_index in visited:
+                        return
+                    visited.add(action_index)
+                    entry = actions[action_index]
                     action = entry.get("action")
                     if not isinstance(action, ClickAction):
-                        continue
-                    
+                        return
+
                     key = (group_index, action_index)
-                    action_item = QTreeWidgetItem(group_item)
+                    action_item = QTreeWidgetItem(parent_tree_item)
                     action_item.setData(0, Qt.ItemDataRole.UserRole, ("action", group_index, action_index))
                     action_item.setFlags(
                         Qt.ItemFlag.ItemIsEnabled
                         | Qt.ItemFlag.ItemIsSelectable
                         | Qt.ItemFlag.ItemIsUserCheckable
                         | Qt.ItemFlag.ItemIsDragEnabled
-                        # | Qt.ItemFlag.ItemIsDropEnabled
+                        | Qt.ItemFlag.ItemIsDropEnabled
                     )
                     action_item.setCheckState(
                         0,
@@ -764,8 +784,7 @@ class MainWindow(QMainWindow):
                     action_item.setText(0, str(entry.get("name", f"Action {action_index + 1}")))
                     self._apply_action_icon(action_item, action)
                     action_item.setText(1, action.type.value.upper())
-                    
-                    # Image preview
+
                     preview_label = QLabel("-")
                     preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
                     if action.type in (ClickType.IMAGE, ClickType.IMAGE_DIRECT):
@@ -782,15 +801,13 @@ class MainWindow(QMainWindow):
                                 )
                                 preview_label.setText("")
                     self.script_tree.setItemWidget(action_item, 2, preview_label)
-                    
-                    # Priority
+
                     if action.type in (ClickType.IMAGE, ClickType.IMAGE_DIRECT):
                         priority_combo = self._create_priority_combo(group_index, action_index, action)
                         self.script_tree.setItemWidget(action_item, 3, priority_combo)
                     else:
                         action_item.setText(3, "-")
-                    
-                    # Delay (editable)
+
                     delay_ms = int(action.data.get("delay_ms", self.config.get("click_delay_ms", 100)) or 0)
                     delay_spin = QSpinBox()
                     delay_spin.setMinimum(0)
@@ -800,14 +817,19 @@ class MainWindow(QMainWindow):
                         lambda value, g=group_index, a=action_index: self._on_delay_spin_changed(g, a, value)
                     )
                     self.script_tree.setItemWidget(action_item, 4, delay_spin)
-                    
-                    # Count
+
                     action_item.setText(5, str(int(self.action_counts.get(key, 0))))
                     action_item.setTextAlignment(5, Qt.AlignmentFlag.AlignCenter)
-                    
-                    # Details
                     action_item.setText(6, self._build_action_details(action))
                     self._tree_action_items[key] = action_item
+
+                    for child_index in action_children.get(entry.get("id"), []):
+                        add_action_node(child_index, action_item)
+
+                for root_index in action_children.get(None, []):
+                    add_action_node(root_index, group_item)
+                for fallback_index in range(len(actions)):
+                    add_action_node(fallback_index, group_item)
                 
                 group_item.setExpanded(True)
             
@@ -1381,9 +1403,9 @@ class MainWindow(QMainWindow):
         self.statusBar.showMessage("Action order updated")
 
     def on_replace_action_requested(self, source_payload, target_payload):
-        """Handle confirmed replace action (drag source on top of target action)."""
+        """Handle setting parent-child relation (drag source onto target action)."""
         if self.auto_clicker.is_running:
-            self.statusBar.showMessage("Cannot replace actions while running")
+            self.statusBar.showMessage("Cannot update parent-child while running")
             self.update_table()
             return
 
@@ -1406,33 +1428,35 @@ class MainWindow(QMainWindow):
         if tgt_ai < 0 or tgt_ai >= len(tgt_actions):
             return
 
-        action_id_to_count = {}
-        for gi, group in enumerate(self.script_groups):
-            for ai, entry in enumerate(group.get("actions", [])):
-                action_obj = entry.get("action")
-                if action_obj is None:
-                    continue
-                action_id_to_count[id(action_obj)] = int(self.action_counts.get((gi, ai), 0))
+        src_entry = src_actions[src_ai]
+        tgt_entry = tgt_actions[tgt_ai]
+        src_id = str(src_entry.get("id") or uuid.uuid4().hex)
+        tgt_id = str(tgt_entry.get("id") or uuid.uuid4().hex)
+        src_entry["id"] = src_id
+        tgt_entry["id"] = tgt_id
 
-        # Replace target with source entry.
-        # Move source entry to target slot and remove one row (replace semantics).
-        moved_entry = src_actions.pop(src_ai)
-        if src_gi == tgt_gi and src_ai < tgt_ai:
-            tgt_ai -= 1
-        tgt_actions[tgt_ai] = moved_entry
+        # Prevent cycle (target cannot be inside source subtree).
+        if src_gi == tgt_gi:
+            by_id = {str(e.get("id")): e for e in src_actions if e.get("id")}
+            cursor = tgt_id
+            while cursor:
+                if cursor == src_id:
+                    self.statusBar.showMessage("Invalid parent-child: cycle detected")
+                    return
+                parent_entry = by_id.get(cursor)
+                cursor = str(parent_entry.get("parent_id")) if parent_entry and parent_entry.get("parent_id") else None
 
-        # Rebuild count map for new indexes.
-        new_counts = {}
-        for gi, group in enumerate(self.script_groups):
-            for ai, entry in enumerate(group.get("actions", [])):
-                action_obj = entry.get("action")
-                new_counts[(gi, ai)] = int(action_id_to_count.get(id(action_obj), 0))
-        self.action_counts = new_counts
+        # Apply parent relation.
+        src_entry["parent_id"] = tgt_id
 
-        # self._reset_action_counts()
+        # If assigning across branches, move source action into target branch.
+        if src_gi != tgt_gi:
+            moved = src_actions.pop(src_ai)
+            tgt_actions.append(moved)
+
         self._last_selected_branch_index = tgt_gi
         self.update_table()
-        self.statusBar.showMessage("Action replaced")
+        self.statusBar.showMessage("Parent-child relation updated")
 
     def _rebuild_groups_from_tree(self):
         """Rebuild script_groups based on current tree visual order."""
@@ -1451,29 +1475,40 @@ class MainWindow(QMainWindow):
             group_enabled = group_item.checkState(0) != Qt.CheckState.Unchecked
 
             actions = []
-            for new_ai in range(group_item.childCount()):
-                action_item = group_item.child(new_ai)
-                a_payload = action_item.data(0, Qt.ItemDataRole.UserRole)
-                if not a_payload or a_payload[0] != "action":
-                    continue
-                src_gi = int(a_payload[1])
-                src_ai = int(a_payload[2])
-                if src_gi < 0 or src_gi >= len(old_groups):
-                    continue
-                src_actions = old_groups[src_gi].get("actions", [])
-                if src_ai < 0 or src_ai >= len(src_actions):
-                    continue
-                src_entry = src_actions[src_ai]
-                action_obj = src_entry.get("action")
-                if not isinstance(action_obj, ClickAction):
-                    continue
-                new_entry = {
-                    "name": (action_item.text(0) or src_entry.get("name", f"Action {new_ai + 1}")).strip() or f"Action {new_ai + 1}",
-                    "enabled": action_item.checkState(0) == Qt.CheckState.Checked,
-                    "action": action_obj,
-                }
-                actions.append(new_entry)
-                new_counts[(new_gi, new_ai)] = int(old_counts.get((src_gi, src_ai), 0))
+            new_ai = 0
+
+            def walk_actions(parent_item, parent_action_id):
+                nonlocal new_ai
+                for i in range(parent_item.childCount()):
+                    action_item = parent_item.child(i)
+                    a_payload = action_item.data(0, Qt.ItemDataRole.UserRole)
+                    if not a_payload or a_payload[0] != "action":
+                        continue
+                    src_gi = int(a_payload[1])
+                    src_ai = int(a_payload[2])
+                    if src_gi < 0 or src_gi >= len(old_groups):
+                        continue
+                    src_actions = old_groups[src_gi].get("actions", [])
+                    if src_ai < 0 or src_ai >= len(src_actions):
+                        continue
+                    src_entry = src_actions[src_ai]
+                    action_obj = src_entry.get("action")
+                    if not isinstance(action_obj, ClickAction):
+                        continue
+                    entry_id = str(src_entry.get("id") or uuid.uuid4().hex)
+                    new_entry = {
+                        "id": entry_id,
+                        "parent_id": parent_action_id,
+                        "name": (action_item.text(0) or src_entry.get("name", f"Action {new_ai + 1}")).strip() or f"Action {new_ai + 1}",
+                        "enabled": action_item.checkState(0) == Qt.CheckState.Checked,
+                        "action": action_obj,
+                    }
+                    actions.append(new_entry)
+                    new_counts[(new_gi, new_ai)] = int(old_counts.get((src_gi, src_ai), 0))
+                    new_ai += 1
+                    walk_actions(action_item, entry_id)
+
+            walk_actions(group_item, None)
 
             new_groups.append({
                 "name": group_name,
@@ -1860,6 +1895,8 @@ class MainWindow(QMainWindow):
         
         actions = self.script_groups[int(branch_index)].setdefault("actions", [])
         actions.append({
+            "id": uuid.uuid4().hex,
+            "parent_id": None,
             "name": f"Action {len(actions) + 1}",
             "enabled": True,
             "action": action
@@ -1873,14 +1910,47 @@ class MainWindow(QMainWindow):
         for group_index, group in enumerate(self.script_groups):
             if not group.get("enabled", True):
                 continue
-            for action_index, entry in enumerate(group.get("actions", [])):
+            actions = group.get("actions", [])
+            for entry in actions:
+                if not entry.get("id"):
+                    entry["id"] = uuid.uuid4().hex
+
+            children_map: dict[str | None, list[int]] = {}
+            for action_index, entry in enumerate(actions):
                 if not entry.get("enabled", True):
                     continue
+                parent_id = entry.get("parent_id")
+                if not parent_id or not any(e.get("id") == parent_id and e.get("enabled", True) for e in actions):
+                    parent_id = None
+                children_map.setdefault(parent_id, []).append(action_index)
+
+            visited = set()
+
+            def add_runtime_node(action_index: int, parent_runtime_index: int | None):
+                if action_index in visited:
+                    return
+                visited.add(action_index)
+                entry = actions[action_index]
+                if not entry.get("enabled", True):
+                    return
                 action = entry.get("action")
                 if not isinstance(action, ClickAction):
-                    continue
-                script.add_action(action)
+                    return
+
+                runtime_action = ClickAction.from_dict(action.to_dict())
+                if parent_runtime_index is not None:
+                    runtime_action.data["__parent_runtime_index"] = int(parent_runtime_index)
+                runtime_index = len(script.get_actions())
+                script.add_action(runtime_action)
                 key_map.append((group_index, action_index))
+
+                for child_index in children_map.get(entry.get("id"), []):
+                    add_runtime_node(child_index, runtime_index)
+
+            for root_index in children_map.get(None, []):
+                add_runtime_node(root_index, None)
+            for fallback_index in range(len(actions)):
+                add_runtime_node(fallback_index, None)
         return script, key_map
     
     def _serialize_grouped_script(self) -> dict:
@@ -1897,6 +1967,8 @@ class MainWindow(QMainWindow):
                 if not isinstance(action, ClickAction):
                     continue
                 group_payload["actions"].append({
+                    "id": str(entry.get("id", uuid.uuid4().hex)),
+                    "parent_id": entry.get("parent_id"),
                     "name": str(entry.get("name", "Action")),
                     "enabled": bool(entry.get("enabled", True)),
                     "action": action.to_dict()
@@ -1926,6 +1998,8 @@ class MainWindow(QMainWindow):
                     except Exception:
                         continue
                     actions.append({
+                        "id": str(entry.get("id") or uuid.uuid4().hex),
+                        "parent_id": entry.get("parent_id"),
                         "name": str(entry.get("name", f"Action {len(actions) + 1}")),
                         "enabled": bool(entry.get("enabled", True)),
                         "action": action
@@ -1935,7 +2009,13 @@ class MainWindow(QMainWindow):
             # Legacy flat format.
             legacy = ClickScript.from_dict(data if isinstance(data, dict) else {})
             actions = [
-                {"name": f"Action {idx + 1}", "enabled": True, "action": action}
+                {
+                    "id": uuid.uuid4().hex,
+                    "parent_id": None,
+                    "name": f"Action {idx + 1}",
+                    "enabled": True,
+                    "action": action
+                }
                 for idx, action in enumerate(legacy.get_actions())
             ]
             loaded_groups.append({"name": "Branch 1", "enabled": True, "actions": actions})

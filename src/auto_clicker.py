@@ -112,11 +112,22 @@ class AutoClicker:
     
     def _execute_once(self):
         """Execute script once"""
+        executed_by_index = {}
         for action_index, action in enumerate(self.current_script.get_actions()):
             if not self.is_running:
                 break
             
             try:
+                parent_runtime_index = action.data.get("__parent_runtime_index")
+                if parent_runtime_index is not None:
+                    try:
+                        pidx = int(parent_runtime_index)
+                    except Exception:
+                        pidx = None
+                    if pidx is not None and not executed_by_index.get(pidx, False):
+                        executed_by_index[action_index] = False
+                        continue
+
                 executed = False
                 if action.type == ClickType.POSITION:
                     executed = self._execute_position_click(action)
@@ -124,6 +135,7 @@ class AutoClicker:
                     executed = self._execute_image_click(action)
                 elif action.type == ClickType.IMAGE_DIRECT:
                     executed = self._execute_image_direct_click(action)
+                executed_by_index[action_index] = bool(executed)
                 
                 if executed:
                     self._notify_action_executed(action_index)
@@ -136,6 +148,7 @@ class AutoClicker:
                 time.sleep(self._get_action_delay_ms(action) / 1000.0)
                 self._execute_priority_actions()
             except Exception as e:
+                executed_by_index[action_index] = False
                 self._notify_status(f"Error executing action: {e}")
     
     def _execute_priority_actions(self):
