@@ -65,6 +65,24 @@ def _ask_hold_ms(parent):
     return int(value)
 
 
+def _ask_scroll_steps(parent):
+    options = ["1 notch", "3 notches", "5 notches", "Custom..."]
+    dialog = _create_dialog(parent, "Scroll Amount", "Select scroll amount:", options)
+    if dialog.exec() != QDialog.DialogCode.Accepted:
+        return None
+    choice = dialog.textValue()
+    if choice == "1 notch":
+        return 1
+    if choice == "3 notches":
+        return 3
+    if choice == "5 notches":
+        return 5
+    value, ok = QInputDialog.getInt(parent, "Custom Scroll", "Scroll notches:", 3, 1, 100, 1)
+    if not ok:
+        return None
+    return int(value)
+
+
 def _ask_drag_ms(parent):
     options = ["300ms", "500ms", "1000ms", "Custom..."]
     dialog = _create_dialog(parent, "Drag Duration", "Select drag duration:", options)
@@ -171,6 +189,8 @@ def choose_advanced_action(parent, start_x: int | None = None, start_y: int | No
     options = [
         "Right Click",
         "Middle Click",
+        "Scroll Up",
+        "Scroll Down",
         "Mouse Hold Left",
         "Mouse Hold Right",
         "Drag Left",
@@ -188,6 +208,16 @@ def choose_advanced_action(parent, start_x: int | None = None, start_y: int | No
         return {"action_mode": "mouse_click", "mouse_button": "right"}
     if choice == "Middle Click":
         return {"action_mode": "mouse_click", "mouse_button": "middle"}
+    if choice == "Scroll Up":
+        steps = _ask_scroll_steps(parent)
+        if steps is None:
+            return None
+        return {"action_mode": "mouse_scroll", "scroll_clicks": int(steps)}
+    if choice == "Scroll Down":
+        steps = _ask_scroll_steps(parent)
+        if steps is None:
+            return None
+        return {"action_mode": "mouse_scroll", "scroll_clicks": -int(steps)}
     if choice == "Mouse Hold Left":
         hold_ms = _ask_hold_ms(parent)
         if hold_ms is None:

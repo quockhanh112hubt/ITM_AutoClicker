@@ -16,7 +16,13 @@ import win32gui
 class AutoClicker:
     """Engine for recording and executing click scripts"""
     
-    def __init__(self, delay_ms: int = 100, priority_cooldown_ms: int = 800, drag_mode: str = "hybrid"):
+    def __init__(
+        self,
+        delay_ms: int = 100,
+        priority_cooldown_ms: int = 800,
+        drag_mode: str = "hybrid",
+        use_real_mouse: bool = False
+    ):
         """
         Initialize auto clicker
         
@@ -27,6 +33,7 @@ class AutoClicker:
         self.delay_ms = delay_ms
         self.priority_cooldown_ms = max(0, priority_cooldown_ms)
         self.drag_mode = str(drag_mode or "hybrid").lower()
+        self.use_real_mouse = bool(use_real_mouse)
         self.is_running = False
         self.is_paused = False
         self.current_script: Optional[ClickScript] = None
@@ -50,6 +57,10 @@ class AutoClicker:
         if mode not in ("hybrid", "background", "real"):
             mode = "hybrid"
         self.drag_mode = mode
+
+    def set_use_real_mouse(self, enabled: bool):
+        """Set whether all mouse actions should use real mouse input."""
+        self.use_real_mouse = bool(enabled)
     
     def set_on_status_changed(self, callback: Callable):
         """Set callback for status changes"""
@@ -203,6 +214,7 @@ class AutoClicker:
         y = action.data.get('y', 0)
         action_mode = str(action.data.get('action_mode', 'mouse_click')).lower()
         mouse_button = str(action.data.get('mouse_button', 'left')).lower()
+        scroll_clicks = int(action.data.get('scroll_clicks', 0) or 0)
         hold_ms = int(action.data.get('hold_ms', 1000) or 1000)
         drag_to_x = action.data.get('drag_to_x')
         drag_to_y = action.data.get('drag_to_y')
@@ -223,6 +235,29 @@ class AutoClicker:
                 return False
             if client_x is None or client_y is None:
                 client_x, client_y = win32gui.ScreenToClient(int(target_hwnd), (int(x), int(y)))
+            if self.use_real_mouse:
+                sx, sy = self._client_to_screen_safe(int(target_hwnd), int(client_x), int(client_y), int(x), int(y))
+                if action_mode == "mouse_drag":
+                    if not self._execute_real_drag_for_target(
+                        action,
+                        int(target_hwnd),
+                        int(client_x),
+                        int(client_y),
+                        fallback_start_screen=(int(sx), int(sy))
+                    ):
+                        return False
+                else:
+                    self._perform_foreground_mouse_action(
+                        int(sx), int(sy), mouse_button, action_mode, hold_ms,
+                        scroll_clicks=scroll_clicks,
+                        drag_to_x=action.data.get("drag_to_x"),
+                        drag_to_y=action.data.get("drag_to_y"),
+                        drag_ms=drag_ms
+                    )
+                self._notify_status(
+                    f"Executed real-mouse {action_mode} on target hwnd={target_hwnd} at screen ({int(sx)}, {int(sy)})"
+                )
+                return True
             if action_mode == "mouse_drag":
                 if not self._execute_drag_for_target(
                     action,
@@ -233,7 +268,10 @@ class AutoClicker:
                 ):
                     return False
             else:
-                self._post_click_client(int(target_hwnd), int(client_x), int(client_y), mouse_button, action_mode, hold_ms)
+                self._post_click_client(
+                    int(target_hwnd), int(client_x), int(client_y),
+                    mouse_button, action_mode, hold_ms, scroll_clicks=scroll_clicks
+                )
             self._notify_status(
                 f"Executed {action_mode} on target hwnd={target_hwnd} at client ({int(client_x)}, {int(client_y)})"
             )
@@ -241,6 +279,7 @@ class AutoClicker:
         
         self._perform_foreground_mouse_action(
             int(x), int(y), mouse_button, action_mode, hold_ms,
+            scroll_clicks=scroll_clicks,
             drag_to_x=drag_to_x, drag_to_y=drag_to_y, drag_ms=drag_ms
         )
         self._notify_status(f"Executed {action_mode} at ({int(x)}, {int(y)})")
@@ -252,6 +291,7 @@ class AutoClicker:
         offset_x = action.data.get('offset_x', 0)
         offset_y = action.data.get('offset_y', 0)
         action_mode = str(action.data.get('action_mode', 'mouse_click')).lower()
+        scroll_clicks = int(action.data.get('scroll_clicks', 0) or 0)
         click_x = action.data.get('click_x')
         click_y = action.data.get('click_y')
         mouse_button = str(action.data.get('mouse_button', 'left')).lower()
@@ -290,6 +330,23 @@ class AutoClicker:
                     if click_client_x is not None and click_client_y is not None:
                         cx = int(click_client_x)
                         cy = int(click_client_y)
+                        if self.use_real_mouse:
+                            sx, sy = self._client_to_screen_safe(target_hwnd, int(cx), int(cy))
+                            if action_mode == "mouse_drag":
+                                if not self._execute_real_drag_for_target(
+                                    action, target_hwnd, int(cx), int(cy), fallback_start_screen=(int(sx), int(sy))
+                                ):
+                                    return False
+                            else:
+                                self._perform_foreground_mouse_action(
+                                    int(sx), int(sy), mouse_button, action_mode, hold_ms,
+                                    scroll_clicks=scroll_clicks,
+                                    drag_to_x=drag_to_x, drag_to_y=drag_to_y, drag_ms=drag_ms
+                                )
+                            self._notify_status(
+                                f"Image found in target: {os.path.basename(image_path)} -> real-mouse {action_mode} at ({int(sx)}, {int(sy)})"
+                            )
+                            return True
                         if action_mode == "mouse_drag":
                             if not self._execute_drag_for_target(
                                 action, target_hwnd, cx, cy,
@@ -302,9 +359,10 @@ class AutoClicker:
                             return True
                         self._post_click_client(
                             target_hwnd, cx, cy, mouse_button, action_mode, hold_ms,
-                            int(drag_client_x) if drag_client_x is not None else None,
-                            int(drag_client_y) if drag_client_y is not None else None,
-                            int(drag_ms)
+                            scroll_clicks=scroll_clicks,
+                            drag_client_x=int(drag_client_x) if drag_client_x is not None else None,
+                            drag_client_y=int(drag_client_y) if drag_client_y is not None else None,
+                            drag_ms=int(drag_ms)
                         )
                         self._notify_status(
                             f"Image found in target: {os.path.basename(image_path)} -> {action_mode} at ({cx}, {cy})"
@@ -312,6 +370,23 @@ class AutoClicker:
                         return True
                     elif click_x is not None and click_y is not None:
                         cx, cy = win32gui.ScreenToClient(target_hwnd, (int(click_x), int(click_y)))
+                        if self.use_real_mouse:
+                            sx, sy = int(click_x), int(click_y)
+                            if action_mode == "mouse_drag":
+                                if not self._execute_real_drag_for_target(
+                                    action, target_hwnd, int(cx), int(cy), fallback_start_screen=(int(sx), int(sy))
+                                ):
+                                    return False
+                            else:
+                                self._perform_foreground_mouse_action(
+                                    int(sx), int(sy), mouse_button, action_mode, hold_ms,
+                                    scroll_clicks=scroll_clicks,
+                                    drag_to_x=drag_to_x, drag_to_y=drag_to_y, drag_ms=drag_ms
+                                )
+                            self._notify_status(
+                                f"Image found in target: {os.path.basename(image_path)} -> real-mouse {action_mode} at ({int(sx)}, {int(sy)})"
+                            )
+                            return True
                         if action_mode == "mouse_drag":
                             if not self._execute_drag_for_target(
                                 action, target_hwnd, int(cx), int(cy),
@@ -324,9 +399,10 @@ class AutoClicker:
                             return True
                         self._post_click_client(
                             target_hwnd, int(cx), int(cy), mouse_button, action_mode, hold_ms,
-                            int(drag_client_x) if drag_client_x is not None else None,
-                            int(drag_client_y) if drag_client_y is not None else None,
-                            int(drag_ms)
+                            scroll_clicks=scroll_clicks,
+                            drag_client_x=int(drag_client_x) if drag_client_x is not None else None,
+                            drag_client_y=int(drag_client_y) if drag_client_y is not None else None,
+                            drag_ms=int(drag_ms)
                         )
                         self._notify_status(
                             f"Image found in target: {os.path.basename(image_path)} -> {action_mode} at ({int(cx)}, {int(cy)})"
@@ -335,6 +411,23 @@ class AutoClicker:
                     else:
                         mx, my = match_pos
                         cx, cy = win32gui.ScreenToClient(target_hwnd, (int(mx), int(my)))
+                        if self.use_real_mouse:
+                            sx, sy = int(mx), int(my)
+                            if action_mode == "mouse_drag":
+                                if not self._execute_real_drag_for_target(
+                                    action, target_hwnd, int(cx), int(cy), fallback_start_screen=(int(sx), int(sy))
+                                ):
+                                    return False
+                            else:
+                                self._perform_foreground_mouse_action(
+                                    int(sx), int(sy), mouse_button, action_mode, hold_ms,
+                                    scroll_clicks=scroll_clicks,
+                                    drag_to_x=drag_to_x, drag_to_y=drag_to_y, drag_ms=drag_ms
+                                )
+                            self._notify_status(
+                                f"Image found in target: {os.path.basename(image_path)} -> real-mouse {action_mode} at matched position"
+                            )
+                            return True
                         if action_mode == "mouse_drag":
                             if not self._execute_drag_for_target(
                                 action, target_hwnd, int(cx), int(cy),
@@ -347,9 +440,10 @@ class AutoClicker:
                             return True
                         self._post_click_client(
                             target_hwnd, int(cx), int(cy), mouse_button, action_mode, hold_ms,
-                            int(drag_client_x) if drag_client_x is not None else None,
-                            int(drag_client_y) if drag_client_y is not None else None,
-                            int(drag_ms)
+                            scroll_clicks=scroll_clicks,
+                            drag_client_x=int(drag_client_x) if drag_client_x is not None else None,
+                            drag_client_y=int(drag_client_y) if drag_client_y is not None else None,
+                            drag_ms=int(drag_ms)
                         )
                         self._notify_status(
                             f"Image found in target: {os.path.basename(image_path)} -> {action_mode} at matched position"
@@ -358,6 +452,7 @@ class AutoClicker:
                 elif click_x is not None and click_y is not None:
                     self._perform_foreground_mouse_action(
                         int(click_x), int(click_y), mouse_button, action_mode, hold_ms,
+                        scroll_clicks=scroll_clicks,
                         drag_to_x=drag_to_x, drag_to_y=drag_to_y, drag_ms=drag_ms
                     )
                     self._notify_status(
@@ -371,6 +466,7 @@ class AutoClicker:
                     y += offset_y
                     self._perform_foreground_mouse_action(
                         x, y, mouse_button, action_mode, hold_ms,
+                        scroll_clicks=scroll_clicks,
                         drag_to_x=drag_to_x, drag_to_y=drag_to_y, drag_ms=drag_ms
                     )
                     self._notify_status(
@@ -388,6 +484,7 @@ class AutoClicker:
         """Execute direct-image click: click matched image center when detected."""
         image_path = action.data.get('image_path', '')
         action_mode = str(action.data.get('action_mode', 'mouse_click')).lower()
+        scroll_clicks = int(action.data.get('scroll_clicks', 0) or 0)
         mouse_button = str(action.data.get('mouse_button', 'left')).lower()
         hold_ms = int(action.data.get('hold_ms', 1000) or 1000)
         drag_to_x = action.data.get('drag_to_x')
@@ -424,6 +521,22 @@ class AutoClicker:
         mx, my = int(match_pos[0]), int(match_pos[1])
         if target_hwnd is not None:
             cx, cy = win32gui.ScreenToClient(target_hwnd, (mx, my))
+            if self.use_real_mouse:
+                if action_mode == "mouse_drag":
+                    if not self._execute_real_drag_for_target(
+                        action, target_hwnd, int(cx), int(cy), fallback_start_screen=(mx, my)
+                    ):
+                        return False
+                else:
+                    self._perform_foreground_mouse_action(
+                        int(mx), int(my), mouse_button, action_mode, hold_ms,
+                        scroll_clicks=scroll_clicks,
+                        drag_to_x=drag_to_x, drag_to_y=drag_to_y, drag_ms=drag_ms
+                    )
+                self._notify_status(
+                    f"Image direct real-mouse {action_mode}: {os.path.basename(image_path)} -> screen ({mx}, {my})"
+                )
+                return True
             if action_mode == "mouse_drag":
                 if not self._execute_drag_for_target(
                     action, target_hwnd, int(cx), int(cy), fallback_start_screen=(mx, my)
@@ -435,9 +548,10 @@ class AutoClicker:
                 return True
             self._post_click_client(
                 target_hwnd, int(cx), int(cy), mouse_button, action_mode, hold_ms,
-                int(drag_client_x) if drag_client_x is not None else None,
-                int(drag_client_y) if drag_client_y is not None else None,
-                int(drag_ms)
+                scroll_clicks=scroll_clicks,
+                drag_client_x=int(drag_client_x) if drag_client_x is not None else None,
+                drag_client_y=int(drag_client_y) if drag_client_y is not None else None,
+                drag_ms=int(drag_ms)
             )
             self._notify_status(
                 f"Image direct {action_mode}: {os.path.basename(image_path)} -> target client ({int(cx)}, {int(cy)})"
@@ -446,6 +560,7 @@ class AutoClicker:
         else:
             self._perform_foreground_mouse_action(
                 mx, my, mouse_button, action_mode, hold_ms,
+                scroll_clicks=scroll_clicks,
                 drag_to_x=drag_to_x, drag_to_y=drag_to_y, drag_ms=drag_ms
             )
             self._notify_status(
@@ -471,6 +586,7 @@ class AutoClicker:
         mouse_button: str = "left",
         action_mode: str = "mouse_click",
         hold_ms: int = 1000,
+        scroll_clicks: int = 0,
         drag_client_x: Optional[int] = None,
         drag_client_y: Optional[int] = None,
         drag_ms: int = 500,
@@ -507,6 +623,9 @@ class AutoClicker:
         win32gui.PostMessage(click_hwnd, win32con.WM_MOUSEMOVE, 0, lparam)
         button = str(mouse_button).lower()
         mode = str(action_mode).lower()
+        if mode == "mouse_scroll":
+            self._post_mouse_wheel(click_hwnd, hwnd, int(lx), int(ly), int(scroll_clicks))
+            return
 
         if button == "right":
             win32gui.PostMessage(click_hwnd, win32con.WM_RBUTTONDOWN, win32con.MK_RBUTTON, lparam)
@@ -537,6 +656,7 @@ class AutoClicker:
         mouse_button: str,
         action_mode: str,
         hold_ms: int,
+        scroll_clicks: int = 0,
         drag_to_x=None,
         drag_to_y=None,
         drag_ms: int = 500
@@ -552,6 +672,11 @@ class AutoClicker:
             pyautogui.mouseDown(int(x), int(y), button=button)
             time.sleep(max(0, int(hold_ms)) / 1000.0)
             pyautogui.mouseUp(int(x), int(y), button=button)
+        elif str(action_mode).lower() == "mouse_scroll":
+            pyautogui.moveTo(int(x), int(y))
+            clicks = int(scroll_clicks)
+            if clicks != 0:
+                pyautogui.scroll(clicks)
         elif str(action_mode).lower() == "mouse_drag":
             if drag_to_x is None or drag_to_y is None:
                 pyautogui.click(int(x), int(y), button=button)
@@ -565,6 +690,36 @@ class AutoClicker:
             )
         else:
             pyautogui.click(int(x), int(y), button=button)
+
+    def _post_mouse_wheel(self, click_hwnd: int, root_hwnd: int, lx: int, ly: int, scroll_clicks: int):
+        """Send mouse wheel messages to click target (and root for compatibility)."""
+        clicks = int(scroll_clicks)
+        if clicks == 0:
+            return
+        step = 1 if clicks > 0 else -1
+        for _ in range(abs(clicks)):
+            delta = win32con.WHEEL_DELTA * step
+            wparam = (delta << 16) & 0xFFFFFFFF
+            lparam = win32api.MAKELONG(int(lx), int(ly))
+            try:
+                win32gui.PostMessage(click_hwnd, win32con.WM_MOUSEWHEEL, wparam, lparam)
+            except Exception:
+                pass
+            if click_hwnd != root_hwnd:
+                try:
+                    win32gui.PostMessage(root_hwnd, win32con.WM_MOUSEWHEEL, wparam, lparam)
+                except Exception:
+                    pass
+
+    def _client_to_screen_safe(self, hwnd: int, client_x: int, client_y: int, fallback_x=None, fallback_y=None):
+        """Convert client coordinates to screen safely."""
+        try:
+            sx, sy = win32gui.ClientToScreen(int(hwnd), (int(client_x), int(client_y)))
+            return int(sx), int(sy)
+        except Exception:
+            if fallback_x is not None and fallback_y is not None:
+                return int(fallback_x), int(fallback_y)
+            return int(client_x), int(client_y)
 
     def _execute_real_drag_for_target(
         self,
@@ -656,6 +811,8 @@ class AutoClicker:
         mode = str(action.data.get("drag_mode", self.drag_mode or "hybrid")).lower()
         if mode not in ("hybrid", "background", "real"):
             mode = "hybrid"
+        if self.use_real_mouse:
+            mode = "real"
 
         if mode in ("background", "hybrid"):
             try:

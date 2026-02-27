@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QTabWidget,
     QLabel, QSpinBox, QFileDialog, QMessageBox, QDialog,
     QDialogButtonBox, QRadioButton, QButtonGroup, QStatusBar,
-    QComboBox, QTreeWidget, QTreeWidgetItem, QInputDialog, QToolButton
+    QComboBox, QTreeWidget, QTreeWidgetItem, QInputDialog, QToolButton, QCheckBox
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QPixmap, QIcon
@@ -215,7 +215,8 @@ class MainWindow(QMainWindow):
         self.auto_clicker = AutoClicker(
             self.config.get("click_delay_ms", 100),
             self.config.get("priority_cooldown_ms", 800),
-            self.config.get("drag_mode", "hybrid")
+            self.config.get("drag_mode", "hybrid"),
+            self.config.get("use_real_mouse", False)
         )
         self.auto_clicker.set_on_status_changed(self.on_status_changed)
         self.auto_clicker.set_on_action_executed(self._on_action_executed_from_worker)
@@ -293,6 +294,7 @@ class MainWindow(QMainWindow):
         self.target_info_label = QLabel("Not selected")
         btn_select_target = QPushButton("Select Target")
         btn_select_target.clicked.connect(self.on_select_target_window)
+        btn_select_target.setToolTip("Choose the target window for recording and execution.")
         target_layout.addWidget(target_title)
         target_layout.addWidget(self.target_info_label)
         target_layout.addStretch()
@@ -315,6 +317,11 @@ class MainWindow(QMainWindow):
         self.btn_tool_position.setCheckable(True)
         self.btn_tool_position.setMinimumWidth(110)
         self.btn_tool_position.setMinimumHeight(56)
+        self.btn_tool_position.setToolTip(
+            "Record POSITION actions.\n"
+            "Use Page Up for left click, Page Down for advanced actions.\n"
+            "Press ESC to finish recording."
+        )
         if self._icons.get("position") and not self._icons.get("position").isNull():
             self.btn_tool_position.setIcon(self._icons.get("position"))
             self.btn_tool_position.setIconSize(QPixmap(40, 40).size())
@@ -327,6 +334,10 @@ class MainWindow(QMainWindow):
         self.btn_tool_image.setCheckable(True)
         self.btn_tool_image.setMinimumWidth(110)
         self.btn_tool_image.setMinimumHeight(56)
+        self.btn_tool_image.setToolTip(
+            "Record IMAGE-based actions.\n"
+            "Program detects image, then performs action at recorded click position."
+        )
         if self._icons.get("image") and not self._icons.get("image").isNull():
             self.btn_tool_image.setIcon(self._icons.get("image"))
             self.btn_tool_image.setIconSize(QPixmap(40, 40).size())
@@ -339,6 +350,10 @@ class MainWindow(QMainWindow):
         self.btn_tool_image_direct.setCheckable(True)
         self.btn_tool_image_direct.setMinimumWidth(110)
         self.btn_tool_image_direct.setMinimumHeight(56)
+        self.btn_tool_image_direct.setToolTip(
+            "Record IMAGE DIRECT actions.\n"
+            "Program detects image, then clicks directly on image match location."
+        )
         if self._icons.get("image_direct") and not self._icons.get("image_direct").isNull():
             self.btn_tool_image_direct.setIcon(self._icons.get("image_direct"))
             self.btn_tool_image_direct.setIconSize(QPixmap(40, 40).size())
@@ -360,12 +375,14 @@ class MainWindow(QMainWindow):
         self.btn_start.clicked.connect(self.on_start)
         self.btn_start.setMinimumWidth(130)
         self.btn_start.setMinimumHeight(65)
+        self.btn_start.setToolTip("Start running checked branches/actions. Hotkey: End (or your custom key).")
         action_toolbar.addWidget(self.btn_start)
 
         self.btn_stop = QPushButton(f"Stop ({self._to_hotkey_display(self.hotkey_bindings['end'])})")
         self.btn_stop.clicked.connect(self.on_stop)
         self.btn_stop.setMinimumWidth(130)
         self.btn_stop.setMinimumHeight(65)
+        self.btn_stop.setToolTip("Stop execution immediately. Hotkey: End (or your custom key).")
         action_toolbar.addWidget(self.btn_stop)
         self._update_run_button_states(False)
         layout.addLayout(action_toolbar)
@@ -392,30 +409,36 @@ class MainWindow(QMainWindow):
         
         btn_add_group = QPushButton("Add Branch")
         btn_add_group.clicked.connect(self.on_add_branch)
+        btn_add_group.setToolTip("Create a new branch (group) to organize actions.")
         button_layout.addWidget(btn_add_group)
         
         # Remove button
         btn_remove = QPushButton("Remove Selected")
         btn_remove.clicked.connect(self.on_remove_action)
+        btn_remove.setToolTip("Remove checked actions first. If none checked, remove checked branch(es).")
         button_layout.addWidget(btn_remove)
         
         btn_rename = QPushButton("Rename")
         btn_rename.clicked.connect(self.on_rename_selected)
+        btn_rename.setToolTip("Rename selected branch/action. You can also double-click the name.")
         button_layout.addWidget(btn_rename)
         
         # Clear button
         btn_clear = QPushButton("Clear All")
         btn_clear.clicked.connect(self.on_clear_all)
+        btn_clear.setToolTip("Clear all branches and actions in current list.")
         button_layout.addWidget(btn_clear)
         
         # Load button
         btn_load = QPushButton("Load Script")
         btn_load.clicked.connect(self.on_load_script)
+        btn_load.setToolTip("Load script from JSON file.")
         button_layout.addWidget(btn_load)
         
         # Save button
         btn_save = QPushButton("Save Script")
         btn_save.clicked.connect(self.on_save_script)
+        btn_save.setToolTip("Save current script list to JSON file.")
         button_layout.addWidget(btn_save)
         
         layout.addLayout(button_layout)
@@ -483,6 +506,20 @@ class MainWindow(QMainWindow):
         drag_layout.addWidget(self.drag_mode_combo)
         drag_layout.addStretch()
         layout.addLayout(drag_layout)
+
+        # Mouse control mode
+        mouse_mode_layout = QHBoxLayout()
+        self.real_mouse_checkbox = QCheckBox("Use real mouse for all actions (occupy mouse)")
+        self.real_mouse_checkbox.setChecked(bool(self.config.get("use_real_mouse", False)))
+        self.real_mouse_checkbox.toggled.connect(self.on_use_real_mouse_changed)
+        self.real_mouse_checkbox.setToolTip(
+            "When enabled, all mouse actions use real cursor input.\n"
+            "Best compatibility for apps that ignore background input,\n"
+            "but it will occupy your mouse during execution."
+        )
+        mouse_mode_layout.addWidget(self.real_mouse_checkbox)
+        mouse_mode_layout.addStretch()
+        layout.addLayout(mouse_mode_layout)
         
         # Hotkey settings
         hotkey_title = QLabel("Hotkeys")
@@ -784,6 +821,7 @@ class MainWindow(QMainWindow):
                     y = int(pos.get("y", 0))
                     action_mode = str(pos.get("action_mode", "mouse_click")).lower()
                     mouse_button = str(pos.get("mouse_button", "left")).lower()
+                    scroll_clicks = pos.get("scroll_clicks")
                     hold_ms = pos.get("hold_ms")
                     drag_to_x = pos.get("drag_to_x")
                     drag_to_y = pos.get("drag_to_y")
@@ -795,6 +833,7 @@ class MainWindow(QMainWindow):
                     x, y = pos
                     action_mode = "mouse_click"
                     mouse_button = "left"
+                    scroll_clicks = None
                     hold_ms = None
                     drag_to_x = None
                     drag_to_y = None
@@ -808,6 +847,8 @@ class MainWindow(QMainWindow):
                     "mouse_button": mouse_button if mouse_button in ("left", "right", "middle") else "left",
                     "delay_ms": default_delay_ms,
                 }
+                if scroll_clicks is not None:
+                    action_data["scroll_clicks"] = int(scroll_clicks)
                 if hold_ms is not None:
                     action_data["hold_ms"] = int(hold_ms)
                 if drag_to_x is not None and drag_to_y is not None:
@@ -889,6 +930,7 @@ class MainWindow(QMainWindow):
             click_client_y=recorded.get("click_client_y"),
             action_mode=recorded.get("action_mode", "mouse_click"),
             mouse_button=recorded.get("mouse_button", "left"),
+            scroll_clicks=recorded.get("scroll_clicks"),
             hold_ms=recorded.get("hold_ms"),
             drag_to_x=recorded.get("drag_to_x"),
             drag_to_y=recorded.get("drag_to_y"),
@@ -1467,6 +1509,16 @@ class MainWindow(QMainWindow):
             mode = "real"
         self.auto_clicker.set_drag_mode(mode)
         self.config.set("drag_mode", mode)
+
+    def on_use_real_mouse_changed(self, checked: bool):
+        """Handle toggle for using real mouse for all actions."""
+        enabled = bool(checked)
+        self.auto_clicker.set_use_real_mouse(enabled)
+        self.config.set("use_real_mouse", enabled)
+        if enabled:
+            self.statusBar.showMessage("Real mouse mode enabled: all actions will occupy mouse")
+        else:
+            self.statusBar.showMessage("Real mouse mode disabled: using non-occupy mode where supported")
     
     def on_hotkey_changed(self, logical_key: str, display_value: str):
         """Handle hotkey changed from settings."""
@@ -1830,6 +1882,13 @@ class MainWindow(QMainWindow):
         if mode == "mouse_hold":
             hold_ms = int(data.get("hold_ms", 1000) or 1000)
             return f"HOLD {button.upper()} {hold_ms}ms"
+        if mode == "mouse_scroll":
+            steps = int(data.get("scroll_clicks", 0) or 0)
+            if steps == 0:
+                return "SCROLL"
+            if steps > 0:
+                return f"SCROLL UP x{steps}"
+            return f"SCROLL DOWN x{abs(steps)}"
         if mode == "mouse_drag":
             drag_ms = int(data.get("drag_ms", 500) or 500)
             drag_to_x = data.get("drag_to_x")

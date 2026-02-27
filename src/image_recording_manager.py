@@ -322,6 +322,7 @@ class ImageRecordingManager:
                 "click_client_y": click_client_y,
                 "action_mode": str(action_data.get("action_mode", "mouse_click")).lower(),
                 "mouse_button": str(action_data.get("mouse_button", "left")).lower(),
+                "scroll_clicks": action_data.get("scroll_clicks"),
                 "hold_ms": action_data.get("hold_ms"),
                 "drag_to_x": action_data.get("drag_to_x"),
                 "drag_to_y": action_data.get("drag_to_y"),
