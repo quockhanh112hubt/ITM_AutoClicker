@@ -224,6 +224,27 @@ class ScriptTreeWidget(QTreeWidget):
             event.ignore()
             return
 
+        # Branch can only be moved between branches.
+        # Block any branch->action drop (on action or action gaps).
+        if (
+            source_payload and target_payload
+            and isinstance(source_payload, tuple) and isinstance(target_payload, tuple)
+            and source_payload[0] == "group" and target_payload[0] == "action"
+        ):
+            event.ignore()
+            return
+
+        # For action -> branch drops:
+        # allow only dropping ON the branch row; block Above/Below gap drops.
+        if (
+            source_payload and target_payload
+            and isinstance(source_payload, tuple) and isinstance(target_payload, tuple)
+            and source_payload[0] == "action" and target_payload[0] == "group"
+            and self.dropIndicatorPosition() != QAbstractItemView.DropIndicatorPosition.OnItem
+        ):
+            event.ignore()
+            return
+
         if (
             source_payload and target_payload
             and isinstance(source_payload, tuple) and isinstance(target_payload, tuple)
