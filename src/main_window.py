@@ -352,7 +352,8 @@ class MainWindow(QMainWindow):
             self.config.get("click_delay_ms", 100),
             self.config.get("priority_cooldown_ms", 800),
             self.config.get("drag_mode", "hybrid"),
-            self.config.get("use_real_mouse", False)
+            self.config.get("use_real_mouse", False),
+            self.config.get("image_confidence", 0.8)
         )
         self.auto_clicker.set_on_status_changed(self.on_status_changed)
         self.auto_clicker.set_on_action_executed(self._on_action_executed_from_worker)

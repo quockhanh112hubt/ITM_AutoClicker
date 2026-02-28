@@ -15,6 +15,7 @@ from src.action_options import choose_advanced_action
 from pynput import mouse
 from PIL import Image
 import win32gui
+from src.logger import AppLogger
 
 
 class ImageRecordingManager:
@@ -159,6 +160,10 @@ class ImageRecordingManager:
                 dialog.close()
             except Exception:
                 pass
+            try:
+                dialog.deleteLater()  # Schedule garbage collection
+            except Exception:
+                pass
         self.image_dialogs.clear()
     
     def _on_region_selected(self, x1: int, y1: int, x2: int, y2: int):
@@ -166,7 +171,7 @@ class ImageRecordingManager:
         if not self.is_recording:
             return
         
-        print(f"[DEBUG] Region selected: ({x1}, {y1}) to ({x2}, {y2})")
+        AppLogger.debug(f"Region selected: ({x1}, {y1}) to ({x2}, {y2})")
         
         # Create images directory
         images_dir = "scripts/images"
@@ -174,9 +179,9 @@ class ImageRecordingManager:
         
         # Save captured image
         image_path = os.path.join(images_dir, f"image_{self.current_image_num}.png")
-        print(f"[DEBUG] Capturing region and saving to: {image_path}")
+        AppLogger.debug(f"Capturing region and saving to: {image_path}")
         ImageMatcher.capture_region(x1, y1, x2, y2, image_path)
-        print(f"[DEBUG] Image saved successfully")
+        AppLogger.debug(f"Image saved successfully")
         
         # Show confirmation dialog
         self._show_confirmation_dialog(image_path)
@@ -213,7 +218,7 @@ class ImageRecordingManager:
                     try:
                         self.on_image_recorded(recorded, current_count)
                     except Exception as e:
-                        print(f"[WARN] on_image_recorded callback failed: {e}")
+                        AppLogger.warning(f"on_image_recorded callback failed: {e}")
                 self._start_next_image()
 
         def on_rejected():
@@ -366,7 +371,7 @@ class ImageRecordingManager:
                 try:
                     self.on_image_recorded(recorded, current_count)
                 except Exception as e:
-                    print(f"[WARN] on_image_recorded callback failed: {e}")
+                    AppLogger.warning(f"on_image_recorded callback failed: {e}")
             
             # Continue recording loop until user presses ESC.
             self._start_next_image()

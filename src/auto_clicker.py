@@ -4,9 +4,18 @@ Auto clicker engine for executing click scripts
 import pyautogui
 import time
 import threading
-from typing import Callable, Optional
+from typing import Callable, Optional, Dict, Tuple, Any
 from src.click_script import ClickScript, ClickAction, ClickType
 from src.image_matcher import ImageMatcher
+from src.constants import (
+    DEFAULT_CLICK_DELAY_MS, DEFAULT_PRIORITY_COOLDOWN_MS, DEFAULT_DRAG_MODE,
+    DEFAULT_HOLD_MS, DEFAULT_DRAG_MS, UNIFORM_COLOR_THRESHOLD,
+    ACTION_EXECUTION_THREAD_TIMEOUT, EXECUTION_THREAD_DAEMON,
+    EXECUTION_WAIT_SLEEP_TIME, ACTION_MODE_MOUSE_DRAG, ACTION_MODE_MOUSE_SCROLL,
+    ACTION_MODE_MOUSE_HOLD, ACTION_MODE_KEY_PRESS, ACTION_MODE_HOTKEY,
+    ACTION_MODE_KEY_HOLD, ACTION_MODE_KEY_HOLD_TRUE, MOUSE_BUTTON_RIGHT,
+    MOUSE_BUTTON_MIDDLE, IMAGE_CONFIDENCE_MIN, IMAGE_CONFIDENCE_MAX
+)
 import os
 import win32api
 import win32con
@@ -18,76 +27,145 @@ class AutoClicker:
     
     def __init__(
         self,
-        delay_ms: int = 100,
-        priority_cooldown_ms: int = 800,
-        drag_mode: str = "hybrid",
-        use_real_mouse: bool = False
+        delay_ms: int = DEFAULT_CLICK_DELAY_MS,
+        priority_cooldown_ms: int = DEFAULT_PRIORITY_COOLDOWN_MS,
+        drag_mode: str = DEFAULT_DRAG_MODE,
+        use_real_mouse: bool = False,
+        image_confidence: float = 0.8
     ):
         """
         Initialize auto clicker
         
         Args:
-            delay_ms: Delay between clicks in milliseconds
-            priority_cooldown_ms: Cooldown for priority image actions in milliseconds
+            delay_ms: Delay between clicks in milliseconds (must be >= 0)
+            priority_cooldown_ms: Cooldown for priority image actions in milliseconds (must be >= 0)
+            drag_mode: Drag execution mode (hybrid/background/real)
+            use_real_mouse: Whether to use real mouse input
+            image_confidence: Confidence threshold for image matching (0-1)
+            
+        Raises:
+            ValueError: If delay_ms or priority_cooldown_ms is negative
+            ValueError: If image_confidence is not between 0 and 1
         """
+        # Validate delay_ms
+        if not isinstance(delay_ms, int):
+            raise ValueError(f"delay_ms must be an integer, got {type(delay_ms).__name__}")
+        if delay_ms < 0:
+            raise ValueError(f"delay_ms must be >= 0, got {delay_ms}")
+        
+        # Validate priority_cooldown_ms
+        if not isinstance(priority_cooldown_ms, int):
+            raise ValueError(f"priority_cooldown_ms must be an integer, got {type(priority_cooldown_ms).__name__}")
+        if priority_cooldown_ms < 0:
+            raise ValueError(f"priority_cooldown_ms must be >= 0, got {priority_cooldown_ms}")
+        
+        # Validate image_confidence
+        if not isinstance(image_confidence, (int, float)):
+            raise ValueError(f"image_confidence must be a number, got {type(image_confidence).__name__}")
+        if not (IMAGE_CONFIDENCE_MIN <= image_confidence <= IMAGE_CONFIDENCE_MAX):
+            raise ValueError(f"image_confidence must be between {IMAGE_CONFIDENCE_MIN} and {IMAGE_CONFIDENCE_MAX}, got {image_confidence}")
+        
         self.delay_ms = delay_ms
-        self.priority_cooldown_ms = max(0, priority_cooldown_ms)
-        self.drag_mode = str(drag_mode or "hybrid").lower()
+        self.priority_cooldown_ms = priority_cooldown_ms
+        self.drag_mode = str(drag_mode or DEFAULT_DRAG_MODE).lower()
         self.use_real_mouse = bool(use_real_mouse)
         self.is_running = False
         self.is_paused = False
         self.current_script: Optional[ClickScript] = None
-        self.image_matcher = ImageMatcher(confidence=0.8)
+        self.image_matcher = ImageMatcher(confidence=image_confidence)
         self._execution_thread: Optional[threading.Thread] = None
         self._on_status_changed: Optional[Callable] = None
         self._on_action_executed: Optional[Callable] = None
         self._priority_last_trigger_at = {}
         self._action_execution_totals = {}
     
-    def set_delay(self, delay_ms: int):
-        """Set delay between clicks"""
-        self.delay_ms = max(0, delay_ms)
+    def set_delay(self, delay_ms: int) -> None:
+        """
+        Set delay between clicks
+        
+        Args:
+            delay_ms: Delay in milliseconds (must be >= 0)
+            
+        Raises:
+            ValueError: If delay_ms is negative
+        """
+        if not isinstance(delay_ms, int):
+            raise ValueError(f"delay_ms must be an integer, got {type(delay_ms).__name__}")
+        if delay_ms < 0:
+            raise ValueError(f"delay_ms must be >= 0, got {delay_ms}")
+        self.delay_ms = delay_ms
     
-    def set_priority_cooldown(self, cooldown_ms: int):
-        """Set cooldown for priority actions"""
-        self.priority_cooldown_ms = max(0, cooldown_ms)
+    def set_priority_cooldown(self, cooldown_ms: int) -> None:
+        """
+        Set cooldown for priority actions
+        
+        Args:
+            cooldown_ms: Cooldown in milliseconds (must be >= 0)
+            
+        Raises:
+            ValueError: If cooldown_ms is negative
+        """
+        if not isinstance(cooldown_ms, int):
+            raise ValueError(f"cooldown_ms must be an integer, got {type(cooldown_ms).__name__}")
+        if cooldown_ms < 0:
+            raise ValueError(f"cooldown_ms must be >= 0, got {cooldown_ms}")
+        self.priority_cooldown_ms = cooldown_ms
 
-    def set_drag_mode(self, drag_mode: str):
-        """Set drag execution mode: hybrid/background/real"""
-        mode = str(drag_mode or "").strip().lower()
+    def set_drag_mode(self, drag_mode: str) -> None:
+        """
+        Set drag execution mode
+        
+        Args:
+            drag_mode: Mode string - 'hybrid', 'background', or 'real'
+            
+        Raises:
+            ValueError: If drag_mode is not one of the valid options
+        """
+        if not isinstance(drag_mode, str):
+            raise ValueError(f"drag_mode must be a string, got {type(drag_mode).__name__}")
+        mode = str(drag_mode).strip().lower()
         if mode not in ("hybrid", "background", "real"):
-            mode = "hybrid"
+            raise ValueError(f"drag_mode must be 'hybrid', 'background', or 'real', got '{drag_mode}'")
         self.drag_mode = mode
 
-    def set_use_real_mouse(self, enabled: bool):
+    def set_use_real_mouse(self, enabled: bool) -> None:
         """Set whether all mouse actions should use real mouse input."""
         self.use_real_mouse = bool(enabled)
     
-    def set_on_status_changed(self, callback: Callable):
+    def set_on_status_changed(self, callback: Callable) -> None:
         """Set callback for status changes"""
         self._on_status_changed = callback
     
-    def set_on_action_executed(self, callback: Callable):
+    def set_on_action_executed(self, callback: Callable) -> None:
         """Set callback(action_index) when an action is actually executed."""
         self._on_action_executed = callback
     
-    def _notify_status(self, message: str):
+    def _notify_status(self, message: str) -> None:
         """Notify status change"""
         if self._on_status_changed:
             self._on_status_changed(message)
     
-    def _notify_action_executed(self, action_index: int):
+    def _notify_action_executed(self, action_index: int) -> None:
         """Notify when an action is executed."""
         if self._on_action_executed:
             self._on_action_executed(int(action_index))
     
-    def execute_script(self, script: ClickScript):
+    def execute_script(self, script: ClickScript) -> None:
         """
         Execute a click script in a separate thread
         
         Args:
             script: ClickScript to execute
+            
+        Raises:
+            ValueError: If script is None
+            RuntimeError: If already running a script
         """
+        if script is None:
+            raise ValueError("script cannot be None")
+        if not isinstance(script, ClickScript):
+            raise ValueError(f"script must be a ClickScript instance, got {type(script).__name__}")
+        
         if self.is_running:
             return
         
@@ -97,10 +175,10 @@ class AutoClicker:
         self._action_execution_totals.clear()
         self._notify_status("Starting auto click...")
         
-        self._execution_thread = threading.Thread(target=self._execute_loop, daemon=True)
+        self._execution_thread = threading.Thread(target=self._execute_loop, daemon=EXECUTION_THREAD_DAEMON)
         self._execution_thread.start()
     
-    def _execute_loop(self):
+    def _execute_loop(self) -> None:
         """Main execution loop"""
         try:
             while self.is_running:
@@ -112,7 +190,7 @@ class AutoClicker:
             self.is_running = False
             self._notify_status("Auto click stopped")
     
-    def _execute_once(self):
+    def _execute_once(self) -> None:
         """Execute script once"""
         executed_by_index = {}
         for action_index, action in enumerate(self.current_script.get_actions()):
@@ -160,7 +238,7 @@ class AutoClicker:
                 executed_by_index[action_index] = False
                 self._notify_status(f"Error executing action: {e}")
     
-    def _execute_priority_actions(self):
+    def _execute_priority_actions(self) -> None:
         """Execute currently-triggered priority image actions in ascending priority order."""
         if not self.current_script or not self.is_running:
             return
@@ -245,7 +323,7 @@ class AutoClicker:
         
         return self.image_matcher.find_image(image_path) is not None
     
-    def _execute_position_click(self, action: ClickAction):
+    def _execute_position_click(self, action: ClickAction) -> bool:
         """Execute position-based click"""
         x = action.data.get('x', 0)
         y = action.data.get('y', 0)
@@ -322,7 +400,7 @@ class AutoClicker:
         self._notify_status(f"Executed {action_mode} at ({int(x)}, {int(y)})")
         return True
     
-    def _execute_image_click(self, action: ClickAction):
+    def _execute_image_click(self, action: ClickAction) -> bool:
         """Execute image-based click"""
         image_path = action.data.get('image_path', '')
         offset_x = action.data.get('offset_x', 0)
@@ -517,7 +595,7 @@ class AutoClicker:
             self._notify_status(f"Image file not found: {image_path}")
             return False
     
-    def _execute_image_direct_click(self, action: ClickAction):
+    def _execute_image_direct_click(self, action: ClickAction) -> bool:
         """Execute direct-image click: click matched image center when detected."""
         image_path = action.data.get('image_path', '')
         action_mode = str(action.data.get('action_mode', 'mouse_click')).lower()
@@ -605,7 +683,7 @@ class AutoClicker:
             )
             return True
     
-    def _validate_target_window(self, hwnd: int):
+    def _validate_target_window(self, hwnd: int) -> Tuple[bool, str]:
         """Validate target window state before background click."""
         if not win32gui.IsWindow(hwnd):
             return False, "Target window was closed."
@@ -627,7 +705,7 @@ class AutoClicker:
         drag_client_x: Optional[int] = None,
         drag_client_y: Optional[int] = None,
         drag_ms: int = 500,
-    ):
+    ) -> None:
         """Post mouse action messages to the most relevant child window at point."""
         # Drag is much more reliable when delivered as an ordered stream
         # on the target window client coordinates.
@@ -694,11 +772,11 @@ class AutoClicker:
         action_mode: str,
         hold_ms: int,
         scroll_clicks: int = 0,
-        drag_to_x=None,
-        drag_to_y=None,
+        drag_to_x: Optional[int] = None,
+        drag_to_y: Optional[int] = None,
         drag_ms: int = 500
-    ):
-        """Perform mouse action using pyautogui on foreground."""
+    ) -> None:
+        """Perform mouse action using pyautogui on foreground window."""
         button = 'left'
         if str(mouse_button).lower() == 'right':
             button = 'right'
@@ -728,7 +806,7 @@ class AutoClicker:
         else:
             pyautogui.click(int(x), int(y), button=button)
 
-    def _post_mouse_wheel(self, click_hwnd: int, root_hwnd: int, lx: int, ly: int, scroll_clicks: int):
+    def _post_mouse_wheel(self, click_hwnd: int, root_hwnd: int, lx: int, ly: int, scroll_clicks: int) -> None:
         """Send mouse wheel messages to click target (and root for compatibility)."""
         clicks = int(scroll_clicks)
         if clicks == 0:
@@ -748,7 +826,7 @@ class AutoClicker:
                 except Exception:
                     pass
 
-    def _client_to_screen_safe(self, hwnd: int, client_x: int, client_y: int, fallback_x=None, fallback_y=None):
+    def _client_to_screen_safe(self, hwnd: int, client_x: int, client_y: int, fallback_x: Optional[int] = None, fallback_y: Optional[int] = None) -> Tuple[int, int]:
         """Convert client coordinates to screen safely."""
         try:
             sx, sy = win32gui.ClientToScreen(int(hwnd), (int(client_x), int(client_y)))
@@ -926,7 +1004,7 @@ class AutoClicker:
         to_y: int,
         mouse_button: str = "left",
         drag_ms: int = 500
-    ):
+    ) -> None:
         """Send ordered drag messages directly to target window client area."""
         # Resolve deepest child/control at drag start point (same strategy as click).
         click_hwnd, start_lx, start_ly = self._resolve_click_target(int(hwnd), int(from_x), int(from_y))
@@ -968,7 +1046,7 @@ class AutoClicker:
                 time.sleep(delay)
         win32gui.SendMessage(click_hwnd, up_msg, 0, end_lp)
 
-    def _execute_key_action(self, action: ClickAction, target_hwnd: Optional[int] = None):
+    def _execute_key_action(self, action: ClickAction, target_hwnd: Optional[int] = None) -> bool:
         """Execute keyboard action types: key_press, hotkey, key_hold."""
         mode = str(action.data.get('action_mode', '')).lower()
         key_name = str(action.data.get('key_name', '')).lower()
@@ -979,7 +1057,7 @@ class AutoClicker:
         if target_hwnd:
             try:
                 win32gui.SetForegroundWindow(int(target_hwnd))
-                time.sleep(0.05)
+                time.sleep(EXECUTION_WAIT_SLEEP_TIME)
             except Exception:
                 pass
         
@@ -1013,7 +1091,8 @@ class AutoClicker:
             return True
         return False
 
-    def _vk_from_key(self, key_name: str):
+    def _vk_from_key(self, key_name: str) -> Optional[int]:
+        """Convert key name to virtual key code."""
         key = str(key_name).lower()
         vk_map = {
             "ctrl": win32con.VK_CONTROL,
@@ -1048,23 +1127,24 @@ class AutoClicker:
                 return ord(ch)
         return None
 
-    def _target_key_down(self, hwnd: int, key_name: str):
+    def _target_key_down(self, hwnd: int, key_name: str) -> None:
         vk = self._vk_from_key(key_name)
         if vk is None:
             return
         win32gui.PostMessage(hwnd, win32con.WM_KEYDOWN, vk, 0)
 
-    def _target_key_up(self, hwnd: int, key_name: str):
+    def _target_key_up(self, hwnd: int, key_name: str) -> None:
         vk = self._vk_from_key(key_name)
         if vk is None:
             return
         win32gui.PostMessage(hwnd, win32con.WM_KEYUP, vk, 0)
 
-    def _target_key_tap(self, hwnd: int, key_name: str):
+    def _target_key_tap(self, hwnd: int, key_name: str) -> None:
         self._target_key_down(hwnd, key_name)
         self._target_key_up(hwnd, key_name)
 
-    def _target_hotkey(self, hwnd: int, keys):
+    def _target_hotkey(self, hwnd: int, keys: list) -> None:
+        """Execute hotkey combination on target window."""
         if not keys:
             return
         if len(keys) == 1:
@@ -1078,7 +1158,7 @@ class AutoClicker:
         for k in reversed(modifiers):
             self._target_key_up(hwnd, k)
     
-    def _resolve_click_target(self, hwnd: int, client_x: int, client_y: int):
+    def _resolve_click_target(self, hwnd: int, client_x: int, client_y: int) -> Tuple[int, int, int]:
         """
         Resolve deepest child window at a client point.
         Returns (target_hwnd, local_x, local_y) where local coords are for target_hwnd.
@@ -1104,25 +1184,25 @@ class AutoClicker:
         except Exception:
             return hwnd, int(client_x), int(client_y)
     
-    def _stop_due_to_target_error(self, error: str, target_title: str = ""):
+    def _stop_due_to_target_error(self, error: str, target_title: str = "") -> None:
         """Stop execution when target window is not usable."""
         label = f" [{target_title}]" if target_title else ""
         self.is_running = False
         self._notify_status(f"Stopped: {error}{label}")
     
-    def pause(self):
+    def pause(self) -> None:
         """Pause execution"""
         self.is_paused = True
         self._notify_status("Paused")
     
-    def resume(self):
+    def resume(self) -> None:
         """Resume execution"""
         self.is_paused = False
         self._notify_status("Resumed")
     
-    def stop(self):
+    def stop(self) -> None:
         """Stop execution"""
         self.is_running = False
         if self._execution_thread:
-            self._execution_thread.join(timeout=2)
+            self._execution_thread.join(timeout=ACTION_EXECUTION_THREAD_TIMEOUT)
         self._notify_status("Stopped")

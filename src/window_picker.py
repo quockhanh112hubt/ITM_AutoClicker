@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
+from src.logger import AppLogger
 
 
 class Window:
@@ -130,15 +131,15 @@ class WindowPickerDialog(QDialog):
         """Refresh the list of windows"""
         self.window_list.clear()
         windows = WindowPicker.get_windows()
-        print(f"[DEBUG WindowPickerDialog] Found {len(windows)} windows")
+        AppLogger.debug(f"Found {len(windows)} windows")
         
         for i, window in enumerate(windows):
             # Safely print window info (handle Unicode)
             try:
                 safe_title = window.title.encode('utf-8', errors='replace').decode('utf-8')
-                print(f"  [{i}] hwnd={window.hwnd}, title={safe_title}")
+                AppLogger.debug(f"  [{i}] hwnd={window.hwnd}, title={safe_title}")
             except:
-                print(f"  [{i}] hwnd={window.hwnd}")
+                AppLogger.debug(f"  [{i}] hwnd={window.hwnd}")
             
             item = QListWidgetItem(window.get_display_name())
             item.setData(Qt.ItemDataRole.UserRole, window)
@@ -146,25 +147,25 @@ class WindowPickerDialog(QDialog):
     
     def on_window_double_clicked(self, item):
         """Handle window double-clicked"""
-        print(f"[DEBUG WindowPickerDialog] Window double-clicked: {item.text()}")
+        AppLogger.debug(f"Window double-clicked: {item.text()}")
         self.on_accept()
     
     def on_accept(self):
         """Handle OK button"""
         current_item = self.window_list.currentItem()
-        print(f"[DEBUG WindowPickerDialog] on_accept called, currentItem={current_item}")
+        AppLogger.debug(f"on_accept called, currentItem={current_item}")
         
         if current_item:
             self.selected_window = current_item.data(Qt.ItemDataRole.UserRole)
             try:
                 safe_title = self.selected_window.title.encode('utf-8', errors='replace').decode('utf-8')
-                print(f"[DEBUG WindowPickerDialog] Selected window: hwnd={self.selected_window.hwnd}, title={safe_title}")
+                AppLogger.debug(f"Selected window: hwnd={self.selected_window.hwnd}, title={safe_title}")
             except:
-                print(f"[DEBUG WindowPickerDialog] Selected window: hwnd={self.selected_window.hwnd}")
+                AppLogger.debug(f"Selected window: hwnd={self.selected_window.hwnd}")
             self.window_selected.emit(self.selected_window)
             self.accept()
         else:
-            print(f"[DEBUG WindowPickerDialog] No window selected!")
+            AppLogger.debug(f"No window selected!")
             # Show error - but we'll let accept handle it
             self.accept()
     

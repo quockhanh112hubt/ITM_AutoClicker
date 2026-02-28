@@ -10,6 +10,7 @@ from PyQt6.QtGui import QPainter, QPen, QColor, QBrush, QFont
 from PyQt6.QtCore import QTimer
 from PIL import ImageGrab
 import os
+from src.logger import AppLogger
 
 
 class WindowRegionSelector(QWidget):
@@ -27,8 +28,8 @@ class WindowRegionSelector(QWidget):
         rect = win32gui.GetWindowRect(window_hwnd)
         window_x1, window_y1, window_x2, window_y2 = rect
         
-        print(f"[DEBUG WindowRegionSelector] Window hwnd={window_hwnd}")
-        print(f"[DEBUG WindowRegionSelector] Window rect from GetWindowRect: ({window_x1}, {window_y1}, {window_x2}, {window_y2})")
+        AppLogger.debug(f"Window hwnd={window_hwnd}")
+        AppLogger.debug(f"Window rect from GetWindowRect: ({window_x1}, {window_y1}, {window_x2}, {window_y2})")
         
         # Store original window rect (with negative coords if any)
         # These will be used for capture coordinates
@@ -49,8 +50,8 @@ class WindowRegionSelector(QWidget):
         self.window_width = window_width
         self.window_height = window_height
         
-        print(f"[DEBUG WindowRegionSelector] Window size: {self.window_width}x{self.window_height}")
-        print(f"[DEBUG WindowRegionSelector] Widget position: ({self.window_x1}, {self.window_y1})")
+        AppLogger.debug(f"Window size: {self.window_width}x{self.window_height}")
+        AppLogger.debug(f"Widget position: ({self.window_x1}, {self.window_y1})")
         
         # Selection state
         self.start_pos: Optional[QPoint] = None
@@ -181,22 +182,22 @@ class WindowRegionSelector(QWidget):
             global_x2 = self.window_x1_orig + x2
             global_y2 = self.window_y1_orig + y2
             
-            print(f"[DEBUG] Window rect (original): ({self.window_x1_orig}, {self.window_y1_orig}, {self.window_x2_orig}, {self.window_y2_orig})")
-            print(f"[DEBUG] Selection local: ({x1}, {y1}, {x2}, {y2})")
-            print(f"[DEBUG] Selection global: ({global_x1}, {global_y1}, {global_x2}, {global_y2})")
+            AppLogger.debug(f"Window rect (original): ({self.window_x1_orig}, {self.window_y1_orig}, {self.window_x2_orig}, {self.window_y2_orig})")
+            AppLogger.debug(f"Selection local: ({x1}, {y1}, {x2}, {y2})")
+            AppLogger.debug(f"Selection global: ({global_x1}, {global_y1}, {global_x2}, {global_y2})")
             
             # Debug: Save a test screenshot of the entire window
             try:
                 from PIL import ImageGrab
                 test_window = ImageGrab.grab(bbox=(self.window_x1, self.window_y1, self.window_x2, self.window_y2))
                 test_window.save("test_window_capture.png")
-                print(f"[DEBUG] Saved test_window_capture.png - size: {test_window.size}")
+                AppLogger.debug(f"Saved test_window_capture.png - size: {test_window.size}")
                 
                 test_region = ImageGrab.grab(bbox=(global_x1, global_y1, global_x2, global_y2))
                 test_region.save("test_region_capture.png")
-                print(f"[DEBUG] Saved test_region_capture.png - size: {test_region.size}")
+                AppLogger.debug(f"Saved test_region_capture.png - size: {test_region.size}")
             except Exception as e:
-                print(f"[DEBUG] Error saving test images: {e}")
+                AppLogger.debug(f"Error saving test images: {e}")
             
             # Close overlay IMMEDIATELY to allow capture
             self.close()

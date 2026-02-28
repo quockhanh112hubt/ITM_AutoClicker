@@ -7,15 +7,18 @@ from PIL import ImageGrab
 from typing import Optional, Tuple
 import pyautogui
 import ctypes
+import os
 import win32gui
 import win32ui
 import win32con
+from src.logger import AppLogger
+from src.constants import UNIFORM_COLOR_THRESHOLD, MIN_REGION_SIZE, IMAGE_CONFIDENCE_MIN, IMAGE_CONFIDENCE_MAX
 
 
 class ImageMatcher:
     """Handle image template matching and clicking"""
     
-    def __init__(self, confidence: float = 0.8):
+    def __init__(self, confidence: float = 0.8) -> None:
         """
         Initialize image matcher
         
@@ -33,7 +36,18 @@ class ImageMatcher:
             
         Returns:
             Tuple of (x, y) if found, None otherwise
+            
+        Raises:
+            ValueError: If template_path is None or empty
+            FileNotFoundError: If template file doesn't exist
         """
+        if not template_path:
+            raise ValueError("template_path cannot be None or empty")
+        if not isinstance(template_path, str):
+            raise ValueError(f"template_path must be a string, got {type(template_path).__name__}")
+        if not os.path.exists(template_path):
+            raise FileNotFoundError(f"Template file not found: {template_path}")
+        
         try:
             # Take screenshot
             screenshot = ImageGrab.grab()
@@ -60,7 +74,7 @@ class ImageMatcher:
             
             return None
         except Exception as e:
-            print(f"Error finding image: {e}")
+            AppLogger.error(f"Error finding image: {e}")
             return None
     
     def _capture_window_image(self, hwnd: int) -> Optional[Tuple[np.ndarray, Tuple[int, int, int, int]]]:
@@ -107,16 +121,35 @@ class ImageMatcher:
             
             return image_bgr, (left, top, right, bottom)
         except Exception as e:
-            print(f"Error capturing window: {e}")
+            AppLogger.error(f"Error capturing window: {e}")
             return None
     
     def find_image_in_window(self, template_path: str, hwnd: int) -> Optional[Tuple[int, int]]:
         """
         Find image inside a specific window.
         
+        Args:
+            template_path: Path to template image
+            hwnd: Window handle
+        
         Returns:
             Screen coordinates (x, y) of matched center if found.
+            
+        Raises:
+            ValueError: If template_path is None or hwnd is invalid
+            FileNotFoundError: If template file doesn't exist
         """
+        if not template_path:
+            raise ValueError("template_path cannot be None or empty")
+        if not isinstance(template_path, str):
+            raise ValueError(f"template_path must be a string, got {type(template_path).__name__}")
+        if not os.path.exists(template_path):
+            raise FileNotFoundError(f"Template file not found: {template_path}")
+        if not isinstance(hwnd, int):
+            raise ValueError(f"hwnd must be an integer, got {type(hwnd).__name__}")
+        if hwnd <= 0:
+            raise ValueError(f"hwnd must be positive, got {hwnd}")
+        
         try:
             captured = self._capture_window_image(hwnd)
             if captured is None:
@@ -139,7 +172,7 @@ class ImageMatcher:
             
             return None
         except Exception as e:
-            print(f"Error finding image in window: {e}")
+            AppLogger.error(f"Error finding image in window: {e}")
             return None
     
     def click_on_image(self, template_path: str, click_offset: Tuple[int, int] = (0, 0)) -> bool:
@@ -163,7 +196,7 @@ class ImageMatcher:
         return False
     
     @staticmethod
-    def capture_region(x1: int, y1: int, x2: int, y2: int, save_path: str):
+    def capture_region(x1: int, y1: int, x2: int, y2: int, save_path: str) -> bool:
         """
         Capture a rectangular region of the screen
         
@@ -171,36 +204,46 @@ class ImageMatcher:
             x1, y1: Top-left coordinates
             x2, y2: Bottom-right coordinates
             save_path: Path to save the captured image
+            
+        Returns:
+            True if capture successful, False otherwise
         """
-        # Normalize coordinates
-        left = min(x1, x2)
-        top = min(y1, y2)
-        right = max(x1, x2)
-        bottom = max(y1, y2)
-        
-        print(f"[DEBUG ImageMatcher] Received: ({x1}, {y1}, {x2}, {y2})")
-        print(f"[DEBUG ImageMatcher] Normalized: ({left}, {top}, {right}, {bottom})")
-        
-        # Clamp to valid screen coordinates (in case of negative coords from DPI scaling)
-        left = max(0, left)
-        top = max(0, top)
-        right = max(0, right)
-        bottom = max(0, bottom)
-        
-        print(f"[DEBUG ImageMatcher] Clamped: ({left}, {top}, {right}, {bottom})")
-        
-        width = right - left
-        height = bottom - top
-        print(f"[DEBUG ImageMatcher] Size: {width}x{height}")
-        
-        # Check if size is valid
-        if width <= 0 or height <= 0:
-            print(f"[ERROR] Invalid region size: {width}x{height}")
-            return
-        
-        # Capture region
-        screenshot = ImageGrab.grab(bbox=(left, top, right, bottom))
-        print(f"[DEBUG ImageMatcher] Captured image size: {screenshot.size}")
-        
-        screenshot.save(save_path)
-        print(f"[DEBUG ImageMatcher] Saved to: {save_path}")
+        try:
+            # Normalize coordinates
+            left = min(x1, x2)
+            top = min(y1, y2)
+            right = max(x1, x2)
+            bottom = max(y1, y2)
+            
+            # Clamp to valid screen coordinates (handle negative coords from DPI scaling)
+            left = max(0, left)
+            top = max(0, top)
+            right = max(0, right)
+            bottom = max(0, bottom)
+            
+            width = right - left
+            height = bottom - top
+            
+            # Validate size
+            if width <= MIN_REGION_SIZE or height <= MIN_REGION_SIZE:
+                AppLogger.error(f"Invalid region size: {width}x{height}")
+                return False
+            
+            # Capture region
+            screenshot = ImageGrab.grab(bbox=(left, top, right, bottom))
+            
+            # Validate captured image is not all uniform (likely error)
+            arr = np.array(screenshot)
+            if np.std(arr) < UNIFORM_COLOR_THRESHOLD:  # Too uniform = likely error
+                AppLogger.warning(f"Captured image looks invalid (uniform color)")
+            
+            # Ensure save directory exists
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            
+            screenshot.save(save_path)
+            AppLogger.info(f"Saved image to: {save_path} (size: {screenshot.size})")
+            return True
+            
+        except Exception as e:
+            AppLogger.error(f"Capture failed: {e}")
+            return False
