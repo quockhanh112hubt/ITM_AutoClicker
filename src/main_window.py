@@ -498,7 +498,7 @@ class MainWindow(QMainWindow):
         # Action toolbar (replaces Add Action + Select Click Type dialog)
         action_toolbar = QHBoxLayout()
         self.btn_tool_position = QToolButton()
-        self.btn_tool_position.setText("Position Based")
+        self.btn_tool_position.setText("Record multi Action")
         self.btn_tool_position.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
         self.btn_tool_position.setCheckable(True)
         self.btn_tool_position.setMinimumWidth(110)
@@ -1033,8 +1033,9 @@ class MainWindow(QMainWindow):
                 key_bindings=self._get_recording_hotkeys()
             )
             self.position_recorder.start()
+            self._set_status_recording_style(True)
             self.statusBar.showMessage(
-                f"Recording actions... {self._to_hotkey_display(self.hotkey_bindings['page_up'])}=Left, "
+                f"🔴 Recording actions... {self._to_hotkey_display(self.hotkey_bindings['page_up'])}=Left, "
                 f"{self._to_hotkey_display(self.hotkey_bindings['page_down'])}=Advanced actions, ESC=finish"
             )
         else:
@@ -1043,8 +1044,9 @@ class MainWindow(QMainWindow):
     
     def on_position_recorded(self, count: int):
         """Handle position recorded"""
+        self._set_status_recording_style(True)
         self.statusBar.showMessage(
-            f"Recording actions... ({count} recorded) "
+            f"🔴 Recording actions... ({count} recorded) "
             f"{self._to_hotkey_display(self.hotkey_bindings['page_up'])}=Left, "
             f"{self._to_hotkey_display(self.hotkey_bindings['page_down'])}=Advanced, ESC=finish"
         )
@@ -1129,6 +1131,7 @@ class MainWindow(QMainWindow):
             self.statusBar.showMessage(f"Added {len(positions)} position-based click(s)")
         else:
             self.statusBar.showMessage("No positions recorded")
+        self._set_status_recording_style(False)
         self.pending_branch_index = None
         self._release_active_action_tool_button()
     
@@ -1225,7 +1228,8 @@ class MainWindow(QMainWindow):
             require_click_position=require_click_position
         )
         mode = "Image Based" if require_click_position else "Image Direct"
-        self.statusBar.showMessage(f"{mode} recording started. Target: {self.selected_target_window.title}")
+        self._set_status_recording_style(True)
+        self.statusBar.showMessage(f"🔴 {mode} recording started. Target: {self.selected_target_window.title}")
     
     def on_image_recorded(self, recorded: dict, total_count: int):
         """Handle one image+click position recorded and persist it immediately"""
@@ -1269,12 +1273,14 @@ class MainWindow(QMainWindow):
             self.statusBar.showMessage(f"Image recording finished. Total recorded: {count}")
         else:
             self.statusBar.showMessage("Image recording finished. No images recorded.")
+        self._set_status_recording_style(False)
         self.pending_branch_index = None
         self._release_active_action_tool_button()
     
     def on_image_recording_cancelled(self):
         """Handle image recording cancelled"""
         self.statusBar.showMessage("Image recording cancelled")
+        self._set_status_recording_style(False)
         self.pending_branch_index = None
         self._release_active_action_tool_button()
 
@@ -1893,6 +1899,20 @@ class MainWindow(QMainWindow):
         )
         self.btn_start.setStyleSheet(start_style)
         self.btn_stop.setStyleSheet(stop_style)
+
+    def _set_status_recording_style(self, recording: bool):
+        """Highlight status bar when recording is active."""
+        if recording:
+            self.statusBar.setStyleSheet(
+                "QStatusBar {"
+                "background-color: #ffe9e9;"
+                "border-top: 1px solid #d77;"
+                "color: #9b1c1c;"
+                "font-weight: 700;"
+                "}"
+            )
+        else:
+            self.statusBar.setStyleSheet("")
     
     def on_clear_all(self):
         """Handle clear all button"""
@@ -2047,6 +2067,7 @@ class MainWindow(QMainWindow):
     
     def on_status_changed(self, message: str):
         """Handle status changed"""
+        self._set_status_recording_style(self._is_recording_active())
         self.statusBar.showMessage(message)
         if (not self.auto_clicker.is_running) and self.btn_stop.isEnabled():
             self._update_run_button_states(False)
