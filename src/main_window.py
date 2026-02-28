@@ -294,10 +294,14 @@ class DragCreateToolButton(QToolButton):
         self._drag_cursor: QCursor | None = None
         self._cursor_active = False
 
-    def set_drag_cursor_pixmap(self, pixmap: QPixmap):
+    def set_drag_cursor_pixmap(self, pixmap: QPixmap, hot_x: int | None = None, hot_y: int | None = None):
         """Set custom cursor shown while dragging this action tool."""
         if pixmap is not None and not pixmap.isNull():
-            self._drag_cursor = QCursor(pixmap, 2, 2)
+            if hot_x is None or hot_y is None:
+                # Default hotspot near pointer tip area for better drop precision.
+                hot_x = max(0, int(pixmap.width() * 0.30))
+                hot_y = max(0, int(pixmap.height() * 0.20))
+            self._drag_cursor = QCursor(pixmap, int(hot_x), int(hot_y))
         else:
             self._drag_cursor = None
 
@@ -599,14 +603,15 @@ class MainWindow(QMainWindow):
                 btn.setIconSize(QPixmap(icon_size, icon_size).size())
             drag_cursor_pm = self._icons.get("mouse_on_drag")
             if isinstance(drag_cursor_pm, QPixmap) and not drag_cursor_pm.isNull():
-                btn.set_drag_cursor_pixmap(
-                    drag_cursor_pm.scaled(
-                        max(18, int(toolbar_h * 0.85)),
-                        max(18, int(toolbar_h * 0.85)),
-                        Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation
-                    )
+                scaled_cursor = drag_cursor_pm.scaled(
+                    max(18, int(toolbar_h * 0.85)),
+                    max(18, int(toolbar_h * 0.85)),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation
                 )
+                hot_x = max(0, int(scaled_cursor.width() * 0.30))
+                hot_y = max(0, int(scaled_cursor.height() * 0.20))
+                btn.set_drag_cursor_pixmap(scaled_cursor, hot_x=hot_x, hot_y=hot_y)
             btn.action_dropped.connect(self.on_advanced_toolbar_drop)
             adv_toolbar.addWidget(btn)
             self._advanced_toolbar_buttons.append(btn)
