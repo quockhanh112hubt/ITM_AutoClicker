@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QTabWidget,
     QLabel, QSpinBox, QFileDialog, QMessageBox, QDialog,
     QDialogButtonBox, QRadioButton, QButtonGroup, QStatusBar,
-    QComboBox, QTreeWidget, QTreeWidgetItem, QInputDialog, QToolButton, QCheckBox, QMenu,
+    QComboBox, QTreeWidget, QTreeWidgetItem, QInputDialog, QToolButton, QCheckBox, QMenu, QApplication,
     QAbstractItemView
 )
 from PyQt6.QtCore import Qt, pyqtSignal
@@ -21,7 +21,7 @@ from src.auto_clicker import AutoClicker
 from src.keyboard_listener import KeyboardListener
 from src.image_recording_manager import ImageRecordingManager
 from src.window_picker import WindowPickerDialog, Window, WindowPicker
-from src.action_options import choose_advanced_action
+from src.action_options import choose_advanced_action, choose_advanced_action_by_choice
 from pynput import mouse
 import win32gui
 
@@ -282,6 +282,37 @@ class ScriptTreeWidget(QTreeWidget):
         self.order_changed.emit()
 
 
+class DragCreateToolButton(QToolButton):
+    """Toolbar button that creates action by drag-and-drop (click does nothing)."""
+    action_dropped = pyqtSignal(str, int, int)  # choice_name, screen_x, screen_y
+
+    def __init__(self, choice_name: str, parent=None):
+        super().__init__(parent)
+        self.choice_name = str(choice_name)
+        self._press_pos = None
+        self._dragging = False
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._press_pos = event.position().toPoint()
+            self._dragging = False
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._press_pos is not None:
+            if (event.position().toPoint() - self._press_pos).manhattanLength() >= QApplication.startDragDistance():
+                self._dragging = True
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self._dragging:
+            pos = mouse.Controller().position
+            self.action_dropped.emit(self.choice_name, int(pos[0]), int(pos[1]))
+        self._press_pos = None
+        self._dragging = False
+        super().mouseReleaseEvent(event)
+
+
 class MainWindow(QMainWindow):
     """Main application window"""
     action_executed_signal = pyqtSignal(int)
@@ -522,6 +553,40 @@ class MainWindow(QMainWindow):
         action_toolbar.addWidget(self.btn_stop)
         self._update_run_button_states(False)
         layout.addLayout(action_toolbar)
+
+        # Advanced action toolbar (equivalent quick actions for PAGE DOWN menu)
+        adv_toolbar = QHBoxLayout()
+        adv_toolbar.setSpacing(4)
+        toolbar_h = max(28, int(self.btn_tool_position.minimumHeight() * 1.2))
+        icon_size = max(14, int(toolbar_h * 0.8))
+        self._advanced_toolbar_buttons = []
+        quick_actions = [
+            ("Right Click", "adv_right_click", "Right Click"),
+            ("Middle Click", "adv_middle_click", "Middle Click"),
+            ("Scroll Up", "adv_scroll_up", "Scroll Up"),
+            ("Scroll Down", "adv_scroll_down", "Scroll Down"),
+            ("Mouse Hold Left", "adv_mouse_hold_left", "Mouse Hold Left"),
+            ("Mouse Hold Right", "adv_mouse_hold_right", "Mouse Hold Right"),
+            ("Drag Left", "adv_drag_left", "Drag Left"),
+            ("Key Press", "adv_key_press", "Key Press"),
+            ("Hotkey", "adv_hotkey", "Hotkey"),
+            ("Key Hold (Repeat)", "adv_key_hold_repeat", "Key Hold (Repeat)"),
+        ]
+        for choice_name, icon_key, tooltip_text in quick_actions:
+            btn = DragCreateToolButton(choice_name)
+            btn.setToolTip(f"{tooltip_text}: drag and drop to create action at drop position.")
+            btn.setAutoRaise(False)
+            btn.setFixedHeight(toolbar_h)
+            btn.setFixedWidth(toolbar_h + 8)
+            icon = self._icons.get(icon_key)
+            if icon and not icon.isNull():
+                btn.setIcon(icon)
+                btn.setIconSize(QPixmap(icon_size, icon_size).size())
+            btn.action_dropped.connect(self.on_advanced_toolbar_drop)
+            adv_toolbar.addWidget(btn)
+            self._advanced_toolbar_buttons.append(btn)
+        adv_toolbar.addStretch()
+        layout.addLayout(adv_toolbar)
         
         # Tree list for script branches/actions
         self.script_tree = ScriptTreeWidget()
@@ -1039,6 +1104,74 @@ class MainWindow(QMainWindow):
     def _choose_record_action(self, start_x: int | None = None, start_y: int | None = None):
         """Show action chooser for PAGE DOWN during recording."""
         return choose_advanced_action(self, start_x, start_y)
+
+    def on_advanced_toolbar_drop(self, choice_name: str, drop_x: int, drop_y: int):
+        """Create one POSITION action by dragging advanced-action icon to screen point."""
+        if not self._ensure_target_selected():
+            return
+        branch_index = self._get_selected_branch_index(require_selection=True)
+        if branch_index is None:
+            QMessageBox.information(
+                self,
+                "Select Branch",
+                "Please select a branch before using advanced action toolbar."
+            )
+            self.statusBar.showMessage("Select a branch first")
+            return
+
+        action_data = choose_advanced_action_by_choice(self, choice_name, int(drop_x), int(drop_y))
+        if not action_data:
+            return
+
+        default_delay_ms = int(self.config.get("click_delay_ms", 100))
+        target_hwnd = int(self.selected_target_window.hwnd) if self.selected_target_window else None
+        target_title = self.selected_target_window.title if self.selected_target_window else ""
+
+        payload = {
+            "x": int(drop_x),
+            "y": int(drop_y),
+            "action_mode": str(action_data.get("action_mode", "mouse_click")).lower(),
+            "mouse_button": str(action_data.get("mouse_button", "left")).lower(),
+            "delay_ms": default_delay_ms,
+            "target_hwnd": target_hwnd,
+            "target_title": target_title,
+        }
+        if action_data.get("scroll_clicks") is not None:
+            payload["scroll_clicks"] = int(action_data.get("scroll_clicks"))
+        if action_data.get("hold_ms") is not None:
+            payload["hold_ms"] = int(action_data.get("hold_ms"))
+        if action_data.get("drag_to_x") is not None and action_data.get("drag_to_y") is not None:
+            payload["drag_to_x"] = int(action_data.get("drag_to_x"))
+            payload["drag_to_y"] = int(action_data.get("drag_to_y"))
+        if action_data.get("drag_ms") is not None:
+            payload["drag_ms"] = int(action_data.get("drag_ms"))
+        if action_data.get("key_name"):
+            payload["key_name"] = str(action_data.get("key_name"))
+        if action_data.get("hotkey_keys"):
+            payload["hotkey_keys"] = list(action_data.get("hotkey_keys"))
+
+        if target_hwnd is not None:
+            try:
+                cx, cy = win32gui.ScreenToClient(target_hwnd, (int(drop_x), int(drop_y)))
+                payload["client_x"] = int(cx)
+                payload["client_y"] = int(cy)
+            except Exception:
+                pass
+            if payload.get("drag_to_x") is not None and payload.get("drag_to_y") is not None:
+                try:
+                    dcx, dcy = win32gui.ScreenToClient(
+                        target_hwnd,
+                        (int(payload.get("drag_to_x")), int(payload.get("drag_to_y")))
+                    )
+                    payload["drag_client_x"] = int(dcx)
+                    payload["drag_client_y"] = int(dcy)
+                except Exception:
+                    pass
+
+        action = ClickAction(ClickType.POSITION, **payload)
+        self._add_action_to_selected_branch(action, int(branch_index))
+        self.update_table()
+        self.statusBar.showMessage(f"Added action '{choice_name}' at ({int(drop_x)}, {int(drop_y)})")
     
     def start_image_recording(self, image_click_type: ClickType = ClickType.IMAGE):
         """Start recording images using the new manager"""
@@ -1610,11 +1743,31 @@ class MainWindow(QMainWindow):
         position_icon = QIcon(self._resource_path(os.path.join("resource", "Position.png")))
         image_icon = QIcon(self._resource_path(os.path.join("resource", "Image.png")))
         image_direct_icon = QIcon(self._resource_path(os.path.join("resource", "ImageDirect.png")))
+        right_click_icon = QIcon(self._resource_path(os.path.join("resource", "RightClick.png")))
+        middle_click_icon = QIcon(self._resource_path(os.path.join("resource", "MiddleClick.png")))
+        scroll_up_icon = QIcon(self._resource_path(os.path.join("resource", "ScrollUp.png")))
+        scroll_down_icon = QIcon(self._resource_path(os.path.join("resource", "ScrollDown.png")))
+        mouse_hold_left_icon = QIcon(self._resource_path(os.path.join("resource", "MouseHoldLeft.png")))
+        mouse_hold_right_icon = QIcon(self._resource_path(os.path.join("resource", "MouseHoldRight.png")))
+        drag_icon = QIcon(self._resource_path(os.path.join("resource", "DragAndDrop.png")))
+        key_press_icon = QIcon(self._resource_path(os.path.join("resource", "KeyPress.png")))
+        hotkey_icon = QIcon(self._resource_path(os.path.join("resource", "Hotkey.png")))
+        key_hold_icon = QIcon(self._resource_path(os.path.join("resource", "KeyHold.png")))
         return {
             "app": app_icon,
             "position": position_icon,
             "image": image_icon,
             "image_direct": image_direct_icon,
+            "adv_right_click": right_click_icon,
+            "adv_middle_click": middle_click_icon,
+            "adv_scroll_up": scroll_up_icon,
+            "adv_scroll_down": scroll_down_icon,
+            "adv_mouse_hold_left": mouse_hold_left_icon,
+            "adv_mouse_hold_right": mouse_hold_right_icon,
+            "adv_drag_left": drag_icon,
+            "adv_key_press": key_press_icon,
+            "adv_hotkey": hotkey_icon,
+            "adv_key_hold_repeat": key_hold_icon,
         }
 
     def _apply_action_icon(self, item: QTreeWidgetItem, action: ClickAction):

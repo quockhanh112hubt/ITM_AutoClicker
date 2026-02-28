@@ -203,6 +203,13 @@ def choose_advanced_action(parent, start_x: int | None = None, start_y: int | No
     if dialog.exec() != QDialog.DialogCode.Accepted:
         return None
     choice = dialog.textValue()
+    return choose_advanced_action_by_choice(parent, choice, start_x, start_y)
+
+
+def choose_advanced_action_by_choice(parent, choice: str, start_x: int | None = None, start_y: int | None = None):
+    """Resolve one advanced-action option into action_data payload."""
+    if not choice:
+        return None
 
     if choice == "Right Click":
         return {"action_mode": "mouse_click", "mouse_button": "right"}

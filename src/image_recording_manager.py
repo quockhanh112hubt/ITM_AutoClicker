@@ -370,6 +370,10 @@ class ImageRecordingManager:
             
             # Continue recording loop until user presses ESC.
             self._start_next_image()
+
+    def record_action_from_toolbar(self, action_data: dict, start_x: int | None = None, start_y: int | None = None):
+        """Public helper: apply one advanced action while waiting for click position."""
+        self._record_waiting_click_position(action_data, start_x=start_x, start_y=start_y)
     
     def _on_esc(self):
         """Handle ESC key press"""
