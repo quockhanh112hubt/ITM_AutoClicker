@@ -580,6 +580,7 @@ class MainWindow(QMainWindow):
         icon_size = max(14, int(toolbar_h * 0.8))
         self._advanced_toolbar_buttons = []
         quick_actions = [
+            ("Left Click", "adv_left_click", "Left Click"),
             ("Right Click", "adv_right_click", "Right Click"),
             ("Middle Click", "adv_middle_click", "Middle Click"),
             ("Scroll Up", "adv_scroll_up", "Scroll Up"),
@@ -1773,6 +1774,7 @@ class MainWindow(QMainWindow):
         position_icon = QIcon(self._resource_path(os.path.join("resource", "Position.png")))
         image_icon = QIcon(self._resource_path(os.path.join("resource", "Image.png")))
         image_direct_icon = QIcon(self._resource_path(os.path.join("resource", "ImageDirect.png")))
+        left_click_icon = QIcon(self._resource_path(os.path.join("resource", "LeftClick.png")))
         right_click_icon = QIcon(self._resource_path(os.path.join("resource", "RightClick.png")))
         middle_click_icon = QIcon(self._resource_path(os.path.join("resource", "MiddleClick.png")))
         scroll_up_icon = QIcon(self._resource_path(os.path.join("resource", "ScrollUp.png")))
@@ -1789,6 +1791,7 @@ class MainWindow(QMainWindow):
             "position": position_icon,
             "image": image_icon,
             "image_direct": image_direct_icon,
+            "adv_left_click": left_click_icon,
             "adv_right_click": right_click_icon,
             "adv_middle_click": middle_click_icon,
             "adv_scroll_up": scroll_up_icon,

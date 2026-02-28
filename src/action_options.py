@@ -211,6 +211,8 @@ def choose_advanced_action_by_choice(parent, choice: str, start_x: int | None = 
     if not choice:
         return None
 
+    if choice == "Left Click":
+        return {"action_mode": "mouse_click", "mouse_button": "left"}
     if choice == "Right Click":
         return {"action_mode": "mouse_click", "mouse_button": "right"}
     if choice == "Middle Click":
