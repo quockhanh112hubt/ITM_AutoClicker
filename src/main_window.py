@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
     QAbstractItemView
 )
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QFont, QPixmap, QIcon
+from PyQt6.QtGui import QFont, QPixmap, QIcon, QCursor
 from src.click_script import ClickScript, ClickAction, ClickType
 from src.config import Config
 from src.auto_clicker import AutoClicker
@@ -291,6 +291,15 @@ class DragCreateToolButton(QToolButton):
         self.choice_name = str(choice_name)
         self._press_pos = None
         self._dragging = False
+        self._drag_cursor: QCursor | None = None
+        self._cursor_active = False
+
+    def set_drag_cursor_pixmap(self, pixmap: QPixmap):
+        """Set custom cursor shown while dragging this action tool."""
+        if pixmap is not None and not pixmap.isNull():
+            self._drag_cursor = QCursor(pixmap, 2, 2)
+        else:
+            self._drag_cursor = None
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -302,9 +311,15 @@ class DragCreateToolButton(QToolButton):
         if self._press_pos is not None:
             if (event.position().toPoint() - self._press_pos).manhattanLength() >= QApplication.startDragDistance():
                 self._dragging = True
+                if self._drag_cursor is not None and not self._cursor_active:
+                    QApplication.setOverrideCursor(self._drag_cursor)
+                    self._cursor_active = True
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
+        if self._cursor_active:
+            QApplication.restoreOverrideCursor()
+            self._cursor_active = False
         if event.button() == Qt.MouseButton.LeftButton and self._dragging:
             pos = mouse.Controller().position
             self.action_dropped.emit(self.choice_name, int(pos[0]), int(pos[1]))
@@ -582,6 +597,16 @@ class MainWindow(QMainWindow):
             if icon and not icon.isNull():
                 btn.setIcon(icon)
                 btn.setIconSize(QPixmap(icon_size, icon_size).size())
+            drag_cursor_pm = self._icons.get("mouse_on_drag")
+            if isinstance(drag_cursor_pm, QPixmap) and not drag_cursor_pm.isNull():
+                btn.set_drag_cursor_pixmap(
+                    drag_cursor_pm.scaled(
+                        max(18, int(toolbar_h * 0.85)),
+                        max(18, int(toolbar_h * 0.85)),
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation
+                    )
+                )
             btn.action_dropped.connect(self.on_advanced_toolbar_drop)
             adv_toolbar.addWidget(btn)
             self._advanced_toolbar_buttons.append(btn)
@@ -1753,6 +1778,7 @@ class MainWindow(QMainWindow):
         key_press_icon = QIcon(self._resource_path(os.path.join("resource", "KeyPress.png")))
         hotkey_icon = QIcon(self._resource_path(os.path.join("resource", "Hotkey.png")))
         key_hold_icon = QIcon(self._resource_path(os.path.join("resource", "KeyHold.png")))
+        mouse_on_drag_pixmap = QPixmap(self._resource_path(os.path.join("resource", "MouseOnDrag.png")))
         return {
             "app": app_icon,
             "position": position_icon,
@@ -1768,6 +1794,7 @@ class MainWindow(QMainWindow):
             "adv_key_press": key_press_icon,
             "adv_hotkey": hotkey_icon,
             "adv_key_hold_repeat": key_hold_icon,
+            "mouse_on_drag": mouse_on_drag_pixmap,
         }
 
     def _apply_action_icon(self, item: QTreeWidgetItem, action: ClickAction):
