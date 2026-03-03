@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
     QAbstractItemView
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
-from PyQt6.QtGui import QFont, QPixmap, QIcon, QCursor
+from PyQt6.QtGui import QFont, QPixmap, QIcon, QCursor, QColor, QBrush
 from src.click_script import ClickScript, ClickAction, ClickType
 from src.config import Config
 from src.auto_clicker import AutoClicker
@@ -69,6 +69,7 @@ class MainWindow(QMainWindow):
         self.action_counts: dict[tuple[int, int], int] = {}
         self._tree_action_items: dict[tuple[int, int], QTreeWidgetItem] = {}
         self._running_action_key_map: list[tuple[int, int]] = []
+        self._highlighted_action_key: tuple[int, int] | None = None
         
         # Recorders
         self.position_recorder = None
@@ -723,6 +724,13 @@ class MainWindow(QMainWindow):
                 if top:
                     self.script_tree.setCurrentItem(top)
                     self._last_selected_branch_index = 0
+
+            if self._highlighted_action_key is not None:
+                hi_item = self._tree_action_items.get(self._highlighted_action_key)
+                if hi_item:
+                    self._set_action_item_highlight(hi_item, True)
+                else:
+                    self._highlighted_action_key = None
         finally:
             self._updating_table = False
     
@@ -2025,6 +2033,7 @@ class MainWindow(QMainWindow):
         
         self._apply_selected_target_to_actions()
         self._reset_action_counts()
+        self._clear_execution_highlight()
         self._running_action_key_map = key_map
         self.update_table()
         
@@ -2034,6 +2043,7 @@ class MainWindow(QMainWindow):
     def on_stop(self):
         """Handle stop button"""
         self.auto_clicker.stop()
+        self._clear_execution_highlight()
         self._update_run_button_states(False)
     
     def toggle_auto_click(self):
@@ -2190,6 +2200,8 @@ class MainWindow(QMainWindow):
         """Handle status changed"""
         self._set_status_recording_style(self._is_recording_active())
         self.statusBar.showMessage(message)
+        if not self.auto_clicker.is_running:
+            self._clear_execution_highlight()
         if (not self.auto_clicker.is_running) and self.btn_stop.isEnabled():
             self._update_run_button_states(False)
     
@@ -2410,6 +2422,35 @@ class MainWindow(QMainWindow):
         for group_index, group in enumerate(self.script_groups):
             for action_index, _ in enumerate(group.get("actions", [])):
                 self.action_counts[(group_index, action_index)] = 0
+
+    def _set_action_item_highlight(self, item: QTreeWidgetItem, highlighted: bool):
+        """Apply/remove execution highlight color for one action row."""
+        if item is None:
+            return
+        brush = QBrush(QColor("#fff3c4")) if highlighted else QBrush()
+        for col in range(self.script_tree.columnCount()):
+            item.setBackground(col, brush)
+            widget = self.script_tree.itemWidget(item, col)
+            if widget is None:
+                continue
+            base_style = widget.property("_base_style")
+            if base_style is None:
+                base_style = widget.styleSheet() or ""
+                widget.setProperty("_base_style", base_style)
+            if highlighted:
+                extra = "background-color: #fff3c4;"
+                widget.setStyleSheet(f"{base_style}; {extra}" if base_style else extra)
+            else:
+                widget.setStyleSheet(str(base_style))
+
+    def _clear_execution_highlight(self):
+        """Clear highlighted action row."""
+        if self._highlighted_action_key is None:
+            return
+        prev_item = self._tree_action_items.get(self._highlighted_action_key)
+        if prev_item:
+            self._set_action_item_highlight(prev_item, False)
+        self._highlighted_action_key = None
     
     def _on_action_executed_from_worker(self, action_index: int):
         """Forward worker-thread callback to Qt main thread."""
@@ -2424,13 +2465,21 @@ class MainWindow(QMainWindow):
         
         key = self._running_action_key_map[action_index]
         self.action_counts[key] = int(self.action_counts.get(key, 0)) + 1
+
+        if self._highlighted_action_key is not None and self._highlighted_action_key != key:
+            prev_item = self._tree_action_items.get(self._highlighted_action_key)
+            if prev_item:
+                self._set_action_item_highlight(prev_item, False)
+
+        self._highlighted_action_key = key
         item = self._tree_action_items.get(key)
         if not item:
             return
-        
+
         self._updating_table = True
         try:
             item.setText(6, str(int(self.action_counts.get(key, 0))))
+            self._set_action_item_highlight(item, True)
         finally:
             self._updating_table = False
     
