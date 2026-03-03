@@ -153,8 +153,8 @@ class MainWindow(QMainWindow):
         drag_cursor_pm = self._icons.get("mouse_on_drag")
         if isinstance(drag_cursor_pm, QPixmap) and not drag_cursor_pm.isNull():
             scaled_cursor = drag_cursor_pm.scaled(
-                24,
-                24,
+                36,
+                36,
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation
             )
