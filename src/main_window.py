@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QComboBox, QTreeWidget, QTreeWidgetItem, QInputDialog, QToolButton, QCheckBox, QMenu, QApplication,
     QAbstractItemView
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QPixmap, QIcon, QCursor
 from src.click_script import ClickScript, ClickAction, ClickType
 from src.config import Config
@@ -25,6 +25,7 @@ from src.action_options import choose_advanced_action, choose_advanced_action_by
 from src.ui.dialogs import SettingsDialog
 from src.ui.recorders import PositionRecorder, ImageRecorder
 from src.ui.widgets import ScriptTreeWidget, DragCreateToolButton
+from src.screen_action_recorder import ScreenActionRecorder
 from pynput import mouse
 import win32gui
 
@@ -60,7 +61,7 @@ class MainWindow(QMainWindow):
         self.keyboard_listener = KeyboardListener()
         self.keyboard_listener.set_binding('end', self.hotkey_bindings['end'])
         self.keyboard_listener.register_callback('end', self.toggle_auto_click)
-        self.keyboard_listener.start()
+        self.keyboard_listener.register_callback('f10', self.on_screen_record_hotkey_pressed)
         
         # Grouped scripts (branches)
         self.script_groups: list[dict] = []
@@ -84,6 +85,14 @@ class MainWindow(QMainWindow):
         self.target_w_spin: QSpinBox | None = None
         self.target_h_spin: QSpinBox | None = None
         self._updating_table = False
+        self.screen_action_recorder: ScreenActionRecorder | None = None
+        self._screen_record_armed = False
+        self._screen_recording_active = False
+        self._screen_record_target_branch_index: int | None = None
+        self._screen_record_elapsed_timer = QTimer(self)
+        self._screen_record_elapsed_timer.setInterval(200)
+        self._screen_record_elapsed_timer.timeout.connect(self._on_screen_record_elapsed_tick)
+        self._screen_record_restore_states: dict = {}
         self.action_executed_signal.connect(self._on_action_executed_main_thread)
         self._ensure_default_group()
         self._always_on_top_enabled = bool(self.config.get("always_on_top", False))
@@ -91,6 +100,7 @@ class MainWindow(QMainWindow):
         # Setup UI
         self.setup_ui()
         self._apply_always_on_top_to_main()
+        self.keyboard_listener.start()
         
         # Update table
         self.update_table()
@@ -132,21 +142,21 @@ class MainWindow(QMainWindow):
         target_title = QLabel("Target Window:")
         target_title.setStyleSheet("font-weight: bold;")
         self.target_info_label = QLabel("Not selected")
-        btn_select_target = QPushButton("Select Target")
-        btn_select_target.clicked.connect(self.on_select_target_window)
-        btn_select_target.setToolTip("Choose the target window for recording and execution.")
-        btn_load_top = QPushButton("Load Script")
-        btn_load_top.clicked.connect(self.on_load_script)
-        btn_load_top.setToolTip("Load script from JSON file.")
-        btn_save_top = QPushButton("Save Script")
-        btn_save_top.clicked.connect(self.on_save_script)
-        btn_save_top.setToolTip("Save current script list to JSON file.")
+        self.btn_select_target = QPushButton("Select Target")
+        self.btn_select_target.clicked.connect(self.on_select_target_window)
+        self.btn_select_target.setToolTip("Choose the target window for recording and execution.")
+        self.btn_load_top = QPushButton("Load Script")
+        self.btn_load_top.clicked.connect(self.on_load_script)
+        self.btn_load_top.setToolTip("Load script from JSON file.")
+        self.btn_save_top = QPushButton("Save Script")
+        self.btn_save_top.clicked.connect(self.on_save_script)
+        self.btn_save_top.setToolTip("Save current script list to JSON file.")
         target_layout.addWidget(target_title)
         target_layout.addWidget(self.target_info_label)
         target_layout.addStretch()
-        target_layout.addWidget(btn_load_top)
-        target_layout.addWidget(btn_save_top)
-        target_layout.addWidget(btn_select_target)
+        target_layout.addWidget(self.btn_load_top)
+        target_layout.addWidget(self.btn_save_top)
+        target_layout.addWidget(self.btn_select_target)
         layout.addLayout(target_layout)
 
         # Target geometry controls
@@ -175,15 +185,15 @@ class MainWindow(QMainWindow):
         self.target_h_spin.setToolTip("Target window height")
         target_geo_layout.addWidget(self.target_h_spin)
 
-        btn_refresh_target_rect = QPushButton("Refresh Rect")
-        btn_refresh_target_rect.clicked.connect(self.on_refresh_target_geometry)
-        btn_refresh_target_rect.setToolTip("Read current target window position/size into X/Y/W/H fields.")
-        target_geo_layout.addWidget(btn_refresh_target_rect)
+        self.btn_refresh_target_rect = QPushButton("Refresh Rect")
+        self.btn_refresh_target_rect.clicked.connect(self.on_refresh_target_geometry)
+        self.btn_refresh_target_rect.setToolTip("Read current target window position/size into X/Y/W/H fields.")
+        target_geo_layout.addWidget(self.btn_refresh_target_rect)
 
-        btn_fix_target_rect = QPushButton("Fix")
-        btn_fix_target_rect.clicked.connect(self.on_fix_target_geometry)
-        btn_fix_target_rect.setToolTip("Apply X/Y/W/H fields to target window.")
-        target_geo_layout.addWidget(btn_fix_target_rect)
+        self.btn_fix_target_rect = QPushButton("Fix")
+        self.btn_fix_target_rect.clicked.connect(self.on_fix_target_geometry)
+        self.btn_fix_target_rect.setToolTip("Apply X/Y/W/H fields to target window.")
+        target_geo_layout.addWidget(self.btn_fix_target_rect)
         target_geo_layout.addStretch()
         layout.addLayout(target_geo_layout)
         
@@ -247,10 +257,28 @@ class MainWindow(QMainWindow):
             lambda: self.on_toolbar_add_action(ClickType.IMAGE_DIRECT, self.btn_tool_image_direct)
         )
         action_toolbar.addWidget(self.btn_tool_image_direct)
+
+        self.btn_tool_record_screen = QToolButton()
+        self.btn_tool_record_screen.setText("Record screen action")
+        self.btn_tool_record_screen.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+        self.btn_tool_record_screen.setCheckable(True)
+        self.btn_tool_record_screen.setMinimumWidth(128)
+        self.btn_tool_record_screen.setMinimumHeight(56)
+        self.btn_tool_record_screen.setToolTip(
+            "Record all keyboard/mouse actions on screen.\n"
+            "Press F10 to start recording, press F10 again to stop."
+        )
+        if self._icons.get("record_screen") and not self._icons.get("record_screen").isNull():
+            self.btn_tool_record_screen.setIcon(self._icons.get("record_screen"))
+            self.btn_tool_record_screen.setIconSize(QPixmap(40, 40).size())
+        self.btn_tool_record_screen.clicked.connect(self.on_record_screen_action_clicked)
+        action_toolbar.addWidget(self.btn_tool_record_screen)
+
         self._action_tool_buttons = [
             self.btn_tool_position,
             self.btn_tool_image,
             self.btn_tool_image_direct,
+            self.btn_tool_record_screen,
         ]
         self._apply_action_toolbar_button_style()
 
@@ -651,6 +679,15 @@ class MainWindow(QMainWindow):
 
     def on_toolbar_add_action(self, click_type: ClickType, source_button: QToolButton):
         """Handle toolbar quick-add action buttons."""
+        if self._screen_recording_active:
+            self.statusBar.showMessage("Screen recording is active. Press F10 to stop first.")
+            source_button.setChecked(False)
+            return
+        if self._screen_record_armed:
+            self._screen_record_armed = False
+            self.btn_tool_record_screen.setChecked(False)
+            self.statusBar.showMessage("Record Screen Action canceled")
+
         if self._active_action_tool_button is source_button and self._is_recording_active():
             source_button.setChecked(True)
             return
@@ -700,6 +737,15 @@ class MainWindow(QMainWindow):
 
     def _cancel_recording_for_action_switch(self):
         """Auto-ESC current recording flow when switching action button."""
+        if self._screen_recording_active:
+            self._stop_screen_recording()
+            return
+        if self._screen_record_armed:
+            self._screen_record_armed = False
+            self._screen_record_target_branch_index = None
+            self.btn_tool_record_screen.setChecked(False)
+            self.statusBar.showMessage("Record Screen Action canceled")
+            return
         # Position recording: stop and persist current recorded points (ESC behavior).
         if self.position_recorder and self.position_recorder.is_recording:
             positions = list(self.position_recorder.positions)
@@ -710,6 +756,217 @@ class MainWindow(QMainWindow):
         # Image recording: finish gracefully (ESC behavior).
         if self.image_recording_manager and self.image_recording_manager.is_recording:
             self.image_recording_manager.finish()
+
+    def on_record_screen_action_clicked(self):
+        """Arm Record Screen mode, then use F10 to start/stop."""
+        if self.auto_clicker.is_running:
+            self.statusBar.showMessage("Stop auto click before recording screen actions")
+            self.btn_tool_record_screen.setChecked(False)
+            return
+
+        if self._screen_record_armed and not self._screen_recording_active:
+            self._screen_record_armed = False
+            self._screen_record_target_branch_index = None
+            self.btn_tool_record_screen.setChecked(False)
+            self.statusBar.showMessage("Record Screen Action canceled")
+            return
+
+        if self._screen_recording_active:
+            self.statusBar.showMessage("Screen recording is running. Press F10 to stop.")
+            self.btn_tool_record_screen.setChecked(True)
+            return
+
+        if self._is_recording_active():
+            self._cancel_recording_for_action_switch()
+
+        if not self._ensure_target_selected():
+            self.btn_tool_record_screen.setChecked(False)
+            return
+
+        branch_index = self._get_selected_branch_index(require_selection=True)
+        if branch_index is None:
+            QMessageBox.information(
+                self,
+                "Select Branch",
+                "Please select a branch in Click Script List before recording screen actions."
+            )
+            self.statusBar.showMessage("Select a branch first, then use Record screen action")
+            self.btn_tool_record_screen.setChecked(False)
+            return
+
+        self._screen_record_target_branch_index = int(branch_index)
+        self._screen_record_armed = True
+        self.btn_tool_record_screen.setChecked(True)
+        QMessageBox.information(
+            self,
+            "Record Screen Action",
+            "Press F10 to start recording.\nPress F10 again to stop recording."
+        )
+        self.statusBar.showMessage("Record Screen armed: press F10 to start")
+
+    def on_screen_record_hotkey_pressed(self):
+        """Handle global F10 toggle for screen recording."""
+        if not self._screen_record_armed and not self._screen_recording_active:
+            return
+        if self._screen_recording_active:
+            self._stop_screen_recording()
+        else:
+            self._start_screen_recording()
+
+    def _start_screen_recording(self):
+        """Start screen action recording."""
+        if self._screen_recording_active:
+            return
+        if not self._screen_record_armed:
+            return
+        if self._screen_record_target_branch_index is None:
+            self._screen_record_target_branch_index = self._get_selected_branch_index(require_selection=True)
+            if self._screen_record_target_branch_index is None:
+                self._screen_record_armed = False
+                self.btn_tool_record_screen.setChecked(False)
+                self.statusBar.showMessage("No branch selected for recording")
+                return
+
+        if not self._ensure_target_selected():
+            self._screen_record_armed = False
+            self.btn_tool_record_screen.setChecked(False)
+            return
+
+        try:
+            self.screen_action_recorder = ScreenActionRecorder()
+            self.screen_action_recorder.start()
+            self._screen_recording_active = True
+            self._set_screen_recording_controls_locked(True)
+            self._set_status_recording_style(True)
+            self._screen_record_elapsed_timer.start()
+            self._update_screen_record_status()
+        except Exception as e:
+            self.screen_action_recorder = None
+            self._screen_recording_active = False
+            self._screen_record_armed = False
+            self.btn_tool_record_screen.setChecked(False)
+            QMessageBox.warning(self, "Record Screen Action", f"Cannot start recording:\n{e}")
+
+    def _stop_screen_recording(self):
+        """Stop screen action recording and append recorded actions."""
+        recorded_actions = []
+        if self.screen_action_recorder:
+            try:
+                recorded_actions = self.screen_action_recorder.stop()
+            except Exception:
+                recorded_actions = []
+        self.screen_action_recorder = None
+        self._screen_recording_active = False
+        self._screen_record_armed = False
+        self._screen_record_elapsed_timer.stop()
+        self._set_status_recording_style(False)
+        self.btn_tool_record_screen.setChecked(False)
+        self._set_screen_recording_controls_locked(False)
+
+        branch_index = self._screen_record_target_branch_index
+        self._screen_record_target_branch_index = None
+        if not recorded_actions:
+            self.statusBar.showMessage("Screen recording stopped: no action captured")
+            return
+        if branch_index is None:
+            branch_index = self._get_selected_branch_index(require_selection=False)
+
+        target_hwnd = int(self.selected_target_window.hwnd) if self.selected_target_window else None
+        target_title = self.selected_target_window.title if self.selected_target_window else ""
+        added_count = 0
+        for payload in recorded_actions:
+            try:
+                action_data = dict(payload)
+                x = int(action_data.get("x", 0))
+                y = int(action_data.get("y", 0))
+                if target_hwnd is not None:
+                    action_data["target_hwnd"] = int(target_hwnd)
+                    action_data["target_title"] = str(target_title)
+                    try:
+                        cx, cy = win32gui.ScreenToClient(int(target_hwnd), (int(x), int(y)))
+                        action_data["client_x"] = int(cx)
+                        action_data["client_y"] = int(cy)
+                    except Exception:
+                        pass
+                    if action_data.get("drag_to_x") is not None and action_data.get("drag_to_y") is not None:
+                        try:
+                            dcx, dcy = win32gui.ScreenToClient(
+                                int(target_hwnd),
+                                (int(action_data.get("drag_to_x")), int(action_data.get("drag_to_y")))
+                            )
+                            action_data["drag_client_x"] = int(dcx)
+                            action_data["drag_client_y"] = int(dcy)
+                        except Exception:
+                            pass
+
+                action = ClickAction(ClickType.POSITION, **action_data)
+                self._add_action_to_selected_branch(action, branch_index)
+                added_count += 1
+            except Exception:
+                continue
+
+        self.update_table()
+        self.statusBar.showMessage(f"Screen recording stopped: added {added_count} action(s)")
+
+    def _set_screen_recording_controls_locked(self, locked: bool):
+        """Disable all controls except Record Screen button while recording."""
+        controls = [
+            self.btn_select_target,
+            self.btn_load_top,
+            self.btn_save_top,
+            self.btn_refresh_target_rect,
+            self.btn_fix_target_rect,
+            self.btn_tool_position,
+            self.btn_tool_image,
+            self.btn_tool_image_direct,
+            self.btn_start,
+            self.btn_stop,
+            self.script_tree,
+            self.target_x_spin,
+            self.target_y_spin,
+            self.target_w_spin,
+            self.target_h_spin,
+        ]
+        controls.extend(list(self._advanced_toolbar_buttons))
+        if locked:
+            self._screen_record_restore_states = {}
+            for widget in controls:
+                if widget is None:
+                    continue
+                self._screen_record_restore_states[widget] = bool(widget.isEnabled())
+                widget.setEnabled(False)
+            self.btn_tool_record_screen.setEnabled(True)
+            self.btn_tool_record_screen.setChecked(True)
+            return
+
+        for widget, enabled in self._screen_record_restore_states.items():
+            try:
+                widget.setEnabled(bool(enabled))
+            except Exception:
+                continue
+        self._screen_record_restore_states = {}
+        self._update_run_button_states(self.auto_clicker.is_running)
+
+    def _on_screen_record_elapsed_tick(self):
+        """Update status bar with recording elapsed time."""
+        if not self._screen_recording_active:
+            self._screen_record_elapsed_timer.stop()
+            return
+        self._update_screen_record_status()
+
+    def _update_screen_record_status(self):
+        """Show live recording duration and action count."""
+        if not self._screen_recording_active or not self.screen_action_recorder:
+            return
+        elapsed = float(self.screen_action_recorder.elapsed_seconds)
+        action_count = int(self.screen_action_recorder.action_count)
+        minutes = int(elapsed // 60)
+        seconds = int(elapsed % 60)
+        deci = int((elapsed - int(elapsed)) * 10)
+        self.statusBar.showMessage(
+            f"[REC] Screen recording {minutes:02d}:{seconds:02d}.{deci} | "
+            f"actions: {action_count} | F10=stop"
+        )
     
     def on_add_branch(self):
         """Add a new script branch."""
@@ -854,6 +1111,13 @@ class MainWindow(QMainWindow):
 
     def on_advanced_toolbar_drop(self, choice_name: str, drop_x: int, drop_y: int):
         """Create one POSITION action by dragging advanced-action icon to screen point."""
+        if self._screen_recording_active:
+            self.statusBar.showMessage("Screen recording is active. Press F10 to stop first.")
+            return
+        if self._screen_record_armed:
+            self._screen_record_armed = False
+            self.btn_tool_record_screen.setChecked(False)
+            self.statusBar.showMessage("Record Screen Action canceled")
         if not self._ensure_target_selected():
             return
         branch_index = self._get_selected_branch_index(require_selection=True)
@@ -1504,6 +1768,7 @@ class MainWindow(QMainWindow):
         key_press_icon = QIcon(self._resource_path(os.path.join("resource", "KeyPress.png")))
         hotkey_icon = QIcon(self._resource_path(os.path.join("resource", "Hotkey.png")))
         key_hold_icon = QIcon(self._resource_path(os.path.join("resource", "KeyHold.png")))
+        record_screen_icon = QIcon(self._resource_path(os.path.join("resource", "RecordScreen.png")))
         mouse_on_drag_pixmap = QPixmap(self._resource_path(os.path.join("resource", "MouseOnDrag.png")))
         return {
             "app": app_icon,
@@ -1521,6 +1786,7 @@ class MainWindow(QMainWindow):
             "adv_key_press": key_press_icon,
             "adv_hotkey": hotkey_icon,
             "adv_key_hold_repeat": key_hold_icon,
+            "record_screen": record_screen_icon,
             "mouse_on_drag": mouse_on_drag_pixmap,
         }
 
@@ -1684,6 +1950,9 @@ class MainWindow(QMainWindow):
     
     def on_start(self):
         """Handle start button"""
+        if self._screen_record_armed or self._screen_recording_active:
+            self.statusBar.showMessage("Stop/cancel Record Screen Action before starting auto click")
+            return
         runtime_script, key_map = self._build_runtime_script_and_key_map()
         if len(runtime_script.get_actions()) == 0:
             QMessageBox.warning(self, "Warning", "No actions to execute!")
@@ -1707,6 +1976,8 @@ class MainWindow(QMainWindow):
     
     def toggle_auto_click(self):
         """Toggle auto click (END key)"""
+        if self._screen_recording_active or self._screen_record_armed:
+            return
         if self.auto_clicker.is_running:
             self.on_stop()
         else:
@@ -2060,6 +2331,8 @@ class MainWindow(QMainWindow):
             return True
         if self.image_recording_manager and self.image_recording_manager.is_recording:
             return True
+        if self._screen_recording_active:
+            return True
         return False
     
     def _finish_recording_for_quick_start(self):
@@ -2073,6 +2346,8 @@ class MainWindow(QMainWindow):
         # Image recording: finish gracefully (equivalent to ESC flow).
         if self.image_recording_manager and self.image_recording_manager.is_recording:
             self.image_recording_manager.finish()
+        if self._screen_recording_active:
+            self._stop_screen_recording()
     
     def on_select_target_window(self):
         """Select a global target window for recording and execution"""
@@ -2391,6 +2666,9 @@ class MainWindow(QMainWindow):
     
     def closeEvent(self, event):
         """Handle window close"""
+        if self._screen_recording_active:
+            self._stop_screen_recording()
+        self._screen_record_elapsed_timer.stop()
         self.keyboard_listener.stop()
         self.auto_clicker.stop()
         event.accept()

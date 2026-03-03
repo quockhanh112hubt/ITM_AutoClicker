@@ -14,6 +14,7 @@ class KeyboardListener(QObject):
     _page_down_signal = pyqtSignal()
     _esc_signal = pyqtSignal()
     _end_signal = pyqtSignal()
+    _f10_signal = pyqtSignal()
     
     def __init__(self):
         super().__init__()
@@ -22,19 +23,22 @@ class KeyboardListener(QObject):
             'page_up': 'page_up',
             'page_down': 'page_down',
             'esc': 'esc',
-            'end': 'end'
+            'end': 'end',
+            'f10': 'f10'
         }
         self.callbacks = {
             'page_up': [],
             'page_down': [],
             'esc': [],
-            'end': []
+            'end': [],
+            'f10': []
         }
         self._lock = threading.Lock()
         self._page_up_signal.connect(self._dispatch_page_up, Qt.ConnectionType.QueuedConnection)
         self._page_down_signal.connect(self._dispatch_page_down, Qt.ConnectionType.QueuedConnection)
         self._esc_signal.connect(self._dispatch_esc, Qt.ConnectionType.QueuedConnection)
         self._end_signal.connect(self._dispatch_end, Qt.ConnectionType.QueuedConnection)
+        self._f10_signal.connect(self._dispatch_f10, Qt.ConnectionType.QueuedConnection)
     
     def on_press(self, key):
         """Handle key press events"""
@@ -50,6 +54,8 @@ class KeyboardListener(QObject):
                 self._esc_signal.emit()
             elif pressed == self.key_bindings.get('end'):
                 self._end_signal.emit()
+            elif pressed == self.key_bindings.get('f10'):
+                self._f10_signal.emit()
         except AttributeError:
             pass
 
@@ -114,6 +120,10 @@ class KeyboardListener(QObject):
     @pyqtSlot()
     def _dispatch_end(self):
         self._run_callbacks('end')
+
+    @pyqtSlot()
+    def _dispatch_f10(self):
+        self._run_callbacks('f10')
     
     def register_callback(self, key: str, callback: Callable):
         """Register a callback for a specific key"""
