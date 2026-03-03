@@ -184,23 +184,39 @@ class AutoClicker:
             while self.is_running:
                 if not self.is_paused and self.current_script:
                     self._execute_once()
+                else:
+                    time.sleep(0.02)
         except Exception as e:
             self._notify_status(f"Error: {e}")
         finally:
             self.is_running = False
             self._notify_status("Auto click stopped")
+
+    def _sleep_interruptible(self, duration_sec: float) -> bool:
+        """
+        Sleep in small slices so pause/stop can interrupt quickly.
+        Returns False if interrupted by pause/stop.
+        """
+        end_at = time.time() + max(0.0, float(duration_sec))
+        while self.is_running and (not self.is_paused) and time.time() < end_at:
+            remaining = end_at - time.time()
+            time.sleep(min(0.02, max(0.0, remaining)))
+        return self.is_running and (not self.is_paused)
     
     def _execute_once(self) -> None:
         """Execute script once"""
         executed_by_index = {}
         for action_index, action in enumerate(self.current_script.get_actions()):
-            if not self.is_running:
+            if (not self.is_running) or self.is_paused:
                 break
             
             try:
                 if not self._can_execute_by_limit(action_index, action):
                     executed_by_index[action_index] = False
-                    time.sleep(self._get_action_delay_ms(action) / 1000.0)
+                    if not self._sleep_interruptible(self._get_action_delay_ms(action) / 1000.0):
+                        break
+                    if self.is_paused or (not self.is_running):
+                        break
                     self._execute_priority_actions()
                     continue
 
@@ -227,12 +243,15 @@ class AutoClicker:
                     self._action_execution_totals[action_index] = int(self._action_execution_totals.get(action_index, 0)) + 1
                     self._notify_action_executed(action_index)
                 
-                if not self.is_running:
+                if (not self.is_running) or self.is_paused:
                     break
                 
                 # Always wait delay after each action, including the last action in a cycle.
                 # This keeps timing consistent between ...->last and last->first.
-                time.sleep(self._get_action_delay_ms(action) / 1000.0)
+                if not self._sleep_interruptible(self._get_action_delay_ms(action) / 1000.0):
+                    break
+                if self.is_paused or (not self.is_running):
+                    break
                 self._execute_priority_actions()
             except Exception as e:
                 executed_by_index[action_index] = False
@@ -240,7 +259,7 @@ class AutoClicker:
     
     def _execute_priority_actions(self) -> None:
         """Execute currently-triggered priority image actions in ascending priority order."""
-        if not self.current_script or not self.is_running:
+        if not self.current_script or (not self.is_running) or self.is_paused:
             return
         
         candidates = []
@@ -259,7 +278,7 @@ class AutoClicker:
         clicked_count = 0
         
         for level, idx, action in candidates:
-            if not self.is_running:
+            if (not self.is_running) or self.is_paused:
                 break
             if not self._can_execute_by_limit(idx, action):
                 continue
@@ -279,7 +298,8 @@ class AutoClicker:
                     self._notify_action_executed(idx)
                     self._priority_last_trigger_at[idx] = time.time()
                     clicked_count += 1
-                    time.sleep(self._get_action_delay_ms(action) / 1000.0)
+                    if not self._sleep_interruptible(self._get_action_delay_ms(action) / 1000.0):
+                        break
         
         if clicked_count > 0:
             self._notify_status(f"Priority handled: {clicked_count} action(s). Resume normal sequence.")

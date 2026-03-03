@@ -34,6 +34,7 @@ import win32con
 class MainWindow(QMainWindow):
     """Main application window"""
     action_executed_signal = pyqtSignal(int)
+    status_changed_signal = pyqtSignal(str)
     
     def __init__(self):
         super().__init__()
@@ -54,14 +55,16 @@ class MainWindow(QMainWindow):
             self.config.get("use_real_mouse", False),
             self.config.get("image_confidence", 0.8)
         )
-        self.auto_clicker.set_on_status_changed(self.on_status_changed)
+        self.auto_clicker.set_on_status_changed(self._on_status_changed_from_worker)
         self.auto_clicker.set_on_action_executed(self._on_action_executed_from_worker)
         self.hotkey_bindings = self._load_hotkey_bindings()
         
-        # Initialize keyboard listener for Start/Stop
+        # Initialize keyboard listener for Start/Pause/Resume and Stop
         self.keyboard_listener = KeyboardListener()
+        self.keyboard_listener.set_binding('home', self.hotkey_bindings['home'])
         self.keyboard_listener.set_binding('end', self.hotkey_bindings['end'])
-        self.keyboard_listener.register_callback('end', self.toggle_auto_click)
+        self.keyboard_listener.register_callback('home', self.on_home_hotkey_pressed)
+        self.keyboard_listener.register_callback('end', self.on_end_hotkey_pressed)
         self.keyboard_listener.register_callback('f10', self.on_screen_record_hotkey_pressed)
         
         # Grouped scripts (branches)
@@ -99,6 +102,7 @@ class MainWindow(QMainWindow):
         self._screen_record_elapsed_timer.timeout.connect(self._on_screen_record_elapsed_tick)
         self._screen_record_restore_states: dict = {}
         self.action_executed_signal.connect(self._on_action_executed_main_thread)
+        self.status_changed_signal.connect(self.on_status_changed)
         self._ensure_default_group()
         self._always_on_top_enabled = bool(self.config.get("always_on_top", False))
         
@@ -303,11 +307,11 @@ class MainWindow(QMainWindow):
         action_toolbar.addStretch()
 
         # Start/Stop buttons moved next to action toolbar (right side)
-        self.btn_start = QPushButton(f"Start ({self._to_hotkey_display(self.hotkey_bindings['end'])})")
-        self.btn_start.clicked.connect(self.on_start)
+        self.btn_start = QPushButton(f"Start ({self._to_hotkey_display(self.hotkey_bindings['home'])})")
+        self.btn_start.clicked.connect(self.on_start_pause_resume)
         self.btn_start.setMinimumWidth(130)
         self.btn_start.setMinimumHeight(65)
-        self.btn_start.setToolTip("Start running checked branches/actions. Hotkey: End (or your custom key).")
+        self.btn_start.setToolTip("Start/Pause/Resume checked actions. Hotkey: Home (or your custom key).")
         action_toolbar.addWidget(self.btn_start)
 
         speed_layout = QVBoxLayout()
@@ -565,8 +569,24 @@ class MainWindow(QMainWindow):
         hk_action_layout.addStretch()
         layout.addLayout(hk_action_layout)
         
-        hk_toggle_layout = QHBoxLayout()
-        hk_toggle_label = QLabel("Start/Stop Toggle (END):")
+        hk_home_layout = QHBoxLayout()
+        hk_home_label = QLabel("Start/Pause/Resume (HOME):")
+        self.hotkey_home_combo = QComboBox()
+        self.hotkey_home_combo.addItems(self.hotkey_options)
+        home_text = self._to_hotkey_display(self.hotkey_bindings["home"])
+        if self.hotkey_home_combo.findText(home_text) < 0:
+            self.hotkey_home_combo.addItem(home_text)
+        self.hotkey_home_combo.setCurrentText(home_text)
+        self.hotkey_home_combo.currentTextChanged.connect(
+            lambda text: self.on_hotkey_changed("home", text)
+        )
+        hk_home_layout.addWidget(hk_home_label)
+        hk_home_layout.addWidget(self.hotkey_home_combo)
+        hk_home_layout.addStretch()
+        layout.addLayout(hk_home_layout)
+
+        hk_stop_layout = QHBoxLayout()
+        hk_stop_label = QLabel("Stop (END):")
         self.hotkey_end_combo = QComboBox()
         self.hotkey_end_combo.addItems(self.hotkey_options)
         end_text = self._to_hotkey_display(self.hotkey_bindings["end"])
@@ -576,10 +596,10 @@ class MainWindow(QMainWindow):
         self.hotkey_end_combo.currentTextChanged.connect(
             lambda text: self.on_hotkey_changed("end", text)
         )
-        hk_toggle_layout.addWidget(hk_toggle_label)
-        hk_toggle_layout.addWidget(self.hotkey_end_combo)
-        hk_toggle_layout.addStretch()
-        layout.addLayout(hk_toggle_layout)
+        hk_stop_layout.addWidget(hk_stop_label)
+        hk_stop_layout.addWidget(self.hotkey_end_combo)
+        hk_stop_layout.addStretch()
+        layout.addLayout(hk_stop_layout)
         
         layout.addStretch()
         
@@ -1908,6 +1928,7 @@ class MainWindow(QMainWindow):
         bindings = {
             "page_up": str(self.config.get("hotkey_page_up", "page_up")),
             "page_down": str(self.config.get("hotkey_page_down", "page_down")),
+            "home": str(self.config.get("hotkey_home", "home")),
             "end": str(self.config.get("hotkey_end", "end")),
         }
         return bindings
@@ -1921,22 +1942,41 @@ class MainWindow(QMainWindow):
     
     def _update_run_button_states(self, running: bool):
         """Update Start/Stop button enabled state and visual style."""
-        start_active = not running
+        is_paused = bool(self.auto_clicker.is_paused) if running else False
+        start_active = True
         stop_active = running
         
         self.btn_start.setEnabled(start_active)
         self.btn_stop.setEnabled(stop_active)
+        self.btn_stop.setText(f"Stop ({self._to_hotkey_display(self.hotkey_bindings['end'])})")
+
+        if not running:
+            self.btn_start.setText(f"Start ({self._to_hotkey_display(self.hotkey_bindings['home'])})")
+        elif is_paused:
+            self.btn_start.setText("Resume")
+        else:
+            self.btn_start.setText("Pause")
         
         start_style = (
-            "QPushButton {"
-            "background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #56c46c, stop:1 #2f9f45);"
-            "color: white; font-weight: 700; border: 1px solid #2a7f3b; border-bottom: 3px solid #1f5f2c;"
-            "border-radius: 7px; padding: 6px 12px; }"
-            "QPushButton:pressed { border-bottom: 1px solid #1f5f2c; padding-top: 8px; padding-bottom: 4px; }"
-            if start_active else
-            "QPushButton {"
-            "background: #e6e8ea; color: #8b949e; font-weight: 700; border: 1px solid #c7ccd1;"
-            "border-bottom: 2px solid #b6bcc3; border-radius: 7px; padding: 6px 12px; }"
+            (
+                "QPushButton {"
+                "background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #56c46c, stop:1 #2f9f45);"
+                "color: white; font-weight: 700; border: 1px solid #2a7f3b; border-bottom: 3px solid #1f5f2c;"
+                "border-radius: 7px; padding: 6px 12px; }"
+                "QPushButton:pressed { border-bottom: 1px solid #1f5f2c; padding-top: 8px; padding-bottom: 4px; }"
+            ) if not running else (
+                "QPushButton {"
+                "background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #ffd36f, stop:1 #e4a72d);"
+                "color: #2f2f2f; font-weight: 700; border: 1px solid #b5831f; border-bottom: 3px solid #8f6518;"
+                "border-radius: 7px; padding: 6px 12px; }"
+                "QPushButton:pressed { border-bottom: 1px solid #8f6518; padding-top: 8px; padding-bottom: 4px; }"
+            ) if not is_paused else (
+                "QPushButton {"
+                "background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #7db5ff, stop:1 #4f86d8);"
+                "color: white; font-weight: 700; border: 1px solid #3f6cae; border-bottom: 3px solid #315486;"
+                "border-radius: 7px; padding: 6px 12px; }"
+                "QPushButton:pressed { border-bottom: 1px solid #315486; padding-top: 8px; padding-bottom: 4px; }"
+            )
         )
         stop_style = (
             "QPushButton {"
@@ -2051,6 +2091,19 @@ class MainWindow(QMainWindow):
         self.auto_clicker.execute_script(runtime_script)
         self._set_action_add_ui_visible(False)
         self._update_run_button_states(True)
+
+    def on_start_pause_resume(self):
+        """Start script or toggle pause/resume when already running."""
+        if not self.auto_clicker.is_running:
+            self.on_start()
+            return
+        if self.auto_clicker.is_paused:
+            self.auto_clicker.resume()
+            self.statusBar.showMessage("Resumed")
+        else:
+            self.auto_clicker.pause()
+            self.statusBar.showMessage("Paused")
+        self._update_run_button_states(True)
     
     def on_stop(self):
         """Handle stop button"""
@@ -2059,16 +2112,18 @@ class MainWindow(QMainWindow):
         self._clear_execution_highlight()
         self._update_run_button_states(False)
     
-    def toggle_auto_click(self):
-        """Toggle auto click (END key)"""
+    def on_home_hotkey_pressed(self):
+        """Handle HOME hotkey for Start/Pause/Resume."""
         if self._screen_recording_active or self._screen_record_armed:
             return
+        if (not self.auto_clicker.is_running) and self._is_recording_active():
+            self._finish_recording_for_quick_start()
+        self.on_start_pause_resume()
+
+    def on_end_hotkey_pressed(self):
+        """Handle END hotkey for Stop."""
         if self.auto_clicker.is_running:
             self.on_stop()
-        else:
-            if self._is_recording_active():
-                self._finish_recording_for_quick_start()
-            self.on_start()
     
     def on_delay_changed(self, value: int):
         """Handle delay changed"""
@@ -2193,6 +2248,7 @@ class MainWindow(QMainWindow):
                 combo = {
                     "page_up": self.hotkey_page_up_combo,
                     "page_down": self.hotkey_page_down_combo,
+                    "home": self.hotkey_home_combo,
                     "end": self.hotkey_end_combo,
                 }.get(logical_key)
                 if combo:
@@ -2203,10 +2259,13 @@ class MainWindow(QMainWindow):
         
         self.hotkey_bindings[logical_key] = key_token
         self.config.set(f"hotkey_{logical_key}", key_token)
+        if logical_key == "home":
+            self.keyboard_listener.set_binding("home", key_token)
+            self._update_run_button_states(self.auto_clicker.is_running)
         if logical_key == "end":
             self.keyboard_listener.set_binding("end", key_token)
-            self.btn_start.setText(f"Start ({self._to_hotkey_display(key_token)})")
             self.btn_stop.setText(f"Stop ({self._to_hotkey_display(key_token)})")
+            self._update_run_button_states(self.auto_clicker.is_running)
         self.statusBar.showMessage(f"Hotkey {logical_key} set to {self._to_hotkey_display(key_token)}")
     
     def on_status_changed(self, message: str):
@@ -2469,6 +2528,10 @@ class MainWindow(QMainWindow):
     def _on_action_executed_from_worker(self, action_index: int):
         """Forward worker-thread callback to Qt main thread."""
         self.action_executed_signal.emit(int(action_index))
+
+    def _on_status_changed_from_worker(self, message: str):
+        """Forward worker-thread status callback to Qt main thread."""
+        self.status_changed_signal.emit(str(message))
     
     def _on_action_executed_main_thread(self, action_index: int):
         """Increment and refresh one count cell in table."""

@@ -13,6 +13,7 @@ class KeyboardListener(QObject):
     _page_up_signal = pyqtSignal()
     _page_down_signal = pyqtSignal()
     _esc_signal = pyqtSignal()
+    _home_signal = pyqtSignal()
     _end_signal = pyqtSignal()
     _f10_signal = pyqtSignal()
     
@@ -23,6 +24,7 @@ class KeyboardListener(QObject):
             'page_up': 'page_up',
             'page_down': 'page_down',
             'esc': 'esc',
+            'home': 'home',
             'end': 'end',
             'f10': 'f10'
         }
@@ -30,6 +32,7 @@ class KeyboardListener(QObject):
             'page_up': [],
             'page_down': [],
             'esc': [],
+            'home': [],
             'end': [],
             'f10': []
         }
@@ -37,6 +40,7 @@ class KeyboardListener(QObject):
         self._page_up_signal.connect(self._dispatch_page_up, Qt.ConnectionType.QueuedConnection)
         self._page_down_signal.connect(self._dispatch_page_down, Qt.ConnectionType.QueuedConnection)
         self._esc_signal.connect(self._dispatch_esc, Qt.ConnectionType.QueuedConnection)
+        self._home_signal.connect(self._dispatch_home, Qt.ConnectionType.QueuedConnection)
         self._end_signal.connect(self._dispatch_end, Qt.ConnectionType.QueuedConnection)
         self._f10_signal.connect(self._dispatch_f10, Qt.ConnectionType.QueuedConnection)
     
@@ -52,6 +56,8 @@ class KeyboardListener(QObject):
                 self._page_down_signal.emit()
             elif pressed == self.key_bindings.get('esc'):
                 self._esc_signal.emit()
+            elif pressed == self.key_bindings.get('home'):
+                self._home_signal.emit()
             elif pressed == self.key_bindings.get('end'):
                 self._end_signal.emit()
             elif pressed == self.key_bindings.get('f10'):
@@ -116,6 +122,10 @@ class KeyboardListener(QObject):
     @pyqtSlot()
     def _dispatch_esc(self):
         self._run_callbacks('esc')
+
+    @pyqtSlot()
+    def _dispatch_home(self):
+        self._run_callbacks('home')
     
     @pyqtSlot()
     def _dispatch_end(self):
