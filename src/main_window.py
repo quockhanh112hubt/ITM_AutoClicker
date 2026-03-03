@@ -79,6 +79,7 @@ class MainWindow(QMainWindow):
         self.pending_branch_index: int | None = None
         self._active_action_tool_button: QToolButton | None = None
         self._action_tool_buttons: list[QToolButton] = []
+        self._advanced_action_toolbar_widget: QWidget | None = None
         self._last_selected_branch_index: int | None = None
         self.selected_target_window: Window | None = None
         self.target_info_label = None
@@ -344,7 +345,9 @@ class MainWindow(QMainWindow):
         layout.addLayout(action_toolbar)
 
         # Advanced action toolbar (equivalent quick actions for PAGE DOWN menu)
+        self._advanced_action_toolbar_widget = QWidget()
         adv_toolbar = QHBoxLayout()
+        self._advanced_action_toolbar_widget.setLayout(adv_toolbar)
         adv_toolbar.setSpacing(4)
         toolbar_h = max(28, int(self.btn_tool_position.minimumHeight() * 1.2))
         icon_size = max(14, int(toolbar_h * 0.8))
@@ -387,7 +390,7 @@ class MainWindow(QMainWindow):
             adv_toolbar.addWidget(btn)
             self._advanced_toolbar_buttons.append(btn)
         adv_toolbar.addStretch()
-        layout.addLayout(adv_toolbar)
+        layout.addWidget(self._advanced_action_toolbar_widget)
         
         # Tree list for script branches/actions
         self.script_tree = ScriptTreeWidget()
@@ -1949,6 +1952,14 @@ class MainWindow(QMainWindow):
         self.btn_start.setStyleSheet(start_style)
         self.btn_stop.setStyleSheet(stop_style)
 
+    def _set_action_add_ui_visible(self, visible: bool):
+        """Show/hide action-adding UI while script is running."""
+        for button in self._action_tool_buttons:
+            if button is not None:
+                button.setVisible(bool(visible))
+        if self._advanced_action_toolbar_widget is not None:
+            self._advanced_action_toolbar_widget.setVisible(bool(visible))
+
     def _set_status_recording_style(self, recording: bool):
         """Highlight status bar when recording is active."""
         if recording:
@@ -2038,11 +2049,13 @@ class MainWindow(QMainWindow):
         self.update_table()
         
         self.auto_clicker.execute_script(runtime_script)
+        self._set_action_add_ui_visible(False)
         self._update_run_button_states(True)
     
     def on_stop(self):
         """Handle stop button"""
         self.auto_clicker.stop()
+        self._set_action_add_ui_visible(True)
         self._clear_execution_highlight()
         self._update_run_button_states(False)
     
@@ -2201,6 +2214,7 @@ class MainWindow(QMainWindow):
         self._set_status_recording_style(self._is_recording_active())
         self.statusBar.showMessage(message)
         if not self.auto_clicker.is_running:
+            self._set_action_add_ui_visible(True)
             self._clear_execution_highlight()
         if (not self.auto_clicker.is_running) and self.btn_stop.isEnabled():
             self._update_run_button_states(False)
