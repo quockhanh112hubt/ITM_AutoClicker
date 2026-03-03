@@ -84,6 +84,8 @@ class MainWindow(QMainWindow):
         self.target_y_spin: QSpinBox | None = None
         self.target_w_spin: QSpinBox | None = None
         self.target_h_spin: QSpinBox | None = None
+        self.btn_speed_up: QPushButton | None = None
+        self.btn_speed_down: QPushButton | None = None
         self._updating_table = False
         self.screen_action_recorder: ScreenActionRecorder | None = None
         self._screen_record_armed = False
@@ -292,6 +294,31 @@ class MainWindow(QMainWindow):
         self.btn_start.setToolTip("Start running checked branches/actions. Hotkey: End (or your custom key).")
         action_toolbar.addWidget(self.btn_start)
 
+        speed_layout = QVBoxLayout()
+        speed_layout.setSpacing(3)
+        self.btn_speed_up = QPushButton("")
+        self.btn_speed_up.setFixedWidth(max(40, int(self.btn_start.minimumWidth() / 3)))
+        self.btn_speed_up.setFixedHeight(31)
+        self.btn_speed_up.setToolTip("Speed up: reduce delay of all checked actions")
+        speed_up_icon = self._icons.get("speed_up")
+        if speed_up_icon and not speed_up_icon.isNull():
+            self.btn_speed_up.setIcon(speed_up_icon)
+            self.btn_speed_up.setIconSize(QPixmap(18, 18).size())
+        self.btn_speed_up.clicked.connect(self.on_speed_up_clicked)
+        speed_layout.addWidget(self.btn_speed_up)
+
+        self.btn_speed_down = QPushButton("")
+        self.btn_speed_down.setFixedWidth(max(40, int(self.btn_start.minimumWidth() / 3)))
+        self.btn_speed_down.setFixedHeight(31)
+        self.btn_speed_down.setToolTip("Slow down: increase delay of all checked actions")
+        speed_down_icon = self._icons.get("speed_down")
+        if speed_down_icon and not speed_down_icon.isNull():
+            self.btn_speed_down.setIcon(speed_down_icon)
+            self.btn_speed_down.setIconSize(QPixmap(18, 18).size())
+        self.btn_speed_down.clicked.connect(self.on_speed_down_clicked)
+        speed_layout.addWidget(self.btn_speed_down)
+        action_toolbar.addLayout(speed_layout)
+
         self.btn_stop = QPushButton(f"Stop ({self._to_hotkey_display(self.hotkey_bindings['end'])})")
         self.btn_stop.clicked.connect(self.on_stop)
         self.btn_stop.setMinimumWidth(130)
@@ -403,6 +430,21 @@ class MainWindow(QMainWindow):
         delay_layout.addWidget(self.delay_spinbox)
         delay_layout.addStretch()
         layout.addLayout(delay_layout)
+
+        speed_step_layout = QHBoxLayout()
+        speed_step_label = QLabel("Speed Adjust Step (ms):")
+        self.speed_step_spinbox = QSpinBox()
+        self.speed_step_spinbox.setMinimum(1)
+        self.speed_step_spinbox.setMaximum(10000)
+        self.speed_step_spinbox.setValue(int(self.config.get("speed_adjust_step_ms", 100)))
+        self.speed_step_spinbox.valueChanged.connect(self.on_speed_step_changed)
+        self.speed_step_spinbox.setToolTip(
+            "Amount of delay changed by Speed Up / Slow Down buttons."
+        )
+        speed_step_layout.addWidget(speed_step_label)
+        speed_step_layout.addWidget(self.speed_step_spinbox)
+        speed_step_layout.addStretch()
+        layout.addLayout(speed_step_layout)
         
         # Priority cooldown setting
         priority_layout = QHBoxLayout()
@@ -921,6 +963,8 @@ class MainWindow(QMainWindow):
             self.btn_tool_image_direct,
             self.btn_start,
             self.btn_stop,
+            self.btn_speed_up,
+            self.btn_speed_down,
             self.script_tree,
             self.target_x_spin,
             self.target_y_spin,
@@ -1769,6 +1813,8 @@ class MainWindow(QMainWindow):
         hotkey_icon = QIcon(self._resource_path(os.path.join("resource", "Hotkey.png")))
         key_hold_icon = QIcon(self._resource_path(os.path.join("resource", "KeyHold.png")))
         record_screen_icon = QIcon(self._resource_path(os.path.join("resource", "RecordScreen.png")))
+        speed_up_icon = QIcon(self._resource_path(os.path.join("resource", "SpeedUp.png")))
+        speed_down_icon = QIcon(self._resource_path(os.path.join("resource", "SpeedDown.png")))
         mouse_on_drag_pixmap = QPixmap(self._resource_path(os.path.join("resource", "MouseOnDrag.png")))
         return {
             "app": app_icon,
@@ -1787,6 +1833,8 @@ class MainWindow(QMainWindow):
             "adv_hotkey": hotkey_icon,
             "adv_key_hold_repeat": key_hold_icon,
             "record_screen": record_screen_icon,
+            "speed_up": speed_up_icon,
+            "speed_down": speed_down_icon,
             "mouse_on_drag": mouse_on_drag_pixmap,
         }
 
@@ -1989,6 +2037,53 @@ class MainWindow(QMainWindow):
         """Handle delay changed"""
         self.auto_clicker.set_delay(value)
         self.config.set("click_delay_ms", value)
+
+    def on_speed_step_changed(self, value: int):
+        """Handle global speed-adjust step changed."""
+        self.config.set("speed_adjust_step_ms", max(1, int(value)))
+
+    def on_speed_up_clicked(self):
+        """Speed up checked actions by reducing delay."""
+        step = int(self.config.get("speed_adjust_step_ms", 100) or 100)
+        self._adjust_checked_actions_delay(-abs(step))
+
+    def on_speed_down_clicked(self):
+        """Slow down checked actions by increasing delay."""
+        step = int(self.config.get("speed_adjust_step_ms", 100) or 100)
+        self._adjust_checked_actions_delay(abs(step))
+
+    def _adjust_checked_actions_delay(self, delta_ms: int):
+        """Apply delay delta to all checked actions in checked branches."""
+        if self.auto_clicker.is_running:
+            self.statusBar.showMessage("Stop auto click before adjusting delays")
+            return
+        if self._is_recording_active() or self._screen_record_armed:
+            self.statusBar.showMessage("Finish/cancel recording before adjusting delays")
+            return
+
+        changed = 0
+        for group in self.script_groups:
+            if not group.get("enabled", True):
+                continue
+            for entry in group.get("actions", []):
+                if not entry.get("enabled", True):
+                    continue
+                action = entry.get("action")
+                if not isinstance(action, ClickAction):
+                    continue
+                current = int(action.data.get("delay_ms", self.config.get("click_delay_ms", 100)) or 0)
+                action.data["delay_ms"] = max(0, current + int(delta_ms))
+                changed += 1
+
+        if changed <= 0:
+            self.statusBar.showMessage("No checked actions to adjust delay")
+            return
+
+        self.update_table()
+        direction = "increased" if delta_ms > 0 else "decreased"
+        self.statusBar.showMessage(
+            f"Delay {direction} by {abs(int(delta_ms))} ms for {changed} checked action(s)"
+        )
     
     def on_priority_cooldown_changed(self, value: int):
         """Handle priority cooldown changed"""
