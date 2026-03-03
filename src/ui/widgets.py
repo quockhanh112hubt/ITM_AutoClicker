@@ -192,6 +192,18 @@ class DragSelectTargetButton(QPushButton):
         super().__init__(parent)
         self._press_pos = None
         self._dragging = False
+        self._drag_cursor: QCursor | None = None
+        self._cursor_active = False
+
+    def set_drag_cursor_pixmap(self, pixmap: QPixmap, hot_x: int | None = None, hot_y: int | None = None):
+        """Set custom cursor shown while dragging this target-select button."""
+        if pixmap is not None and not pixmap.isNull():
+            if hot_x is None or hot_y is None:
+                hot_x = max(0, int(pixmap.width() * 0.30))
+                hot_y = max(0, int(pixmap.height() * 0.20))
+            self._drag_cursor = QCursor(pixmap, int(hot_x), int(hot_y))
+        else:
+            self._drag_cursor = None
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -203,9 +215,15 @@ class DragSelectTargetButton(QPushButton):
         if self._press_pos is not None:
             if (event.position().toPoint() - self._press_pos).manhattanLength() >= QApplication.startDragDistance():
                 self._dragging = True
+                if self._drag_cursor is not None and not self._cursor_active:
+                    QApplication.setOverrideCursor(self._drag_cursor)
+                    self._cursor_active = True
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
+        if self._cursor_active:
+            QApplication.restoreOverrideCursor()
+            self._cursor_active = False
         if event.button() == Qt.MouseButton.LeftButton and self._dragging:
             pos = QCursor.pos()
             self.target_dropped.emit(int(pos.x()), int(pos.y()))

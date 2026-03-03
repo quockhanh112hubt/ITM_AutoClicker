@@ -150,6 +150,17 @@ class MainWindow(QMainWindow):
         self.btn_select_target.clicked.connect(self.on_select_target_window)
         self.btn_select_target.target_dropped.connect(self.on_select_target_window_dropped)
         self.btn_select_target.setToolTip("Choose the target window for recording and execution.")
+        drag_cursor_pm = self._icons.get("mouse_on_drag")
+        if isinstance(drag_cursor_pm, QPixmap) and not drag_cursor_pm.isNull():
+            scaled_cursor = drag_cursor_pm.scaled(
+                24,
+                24,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation
+            )
+            hot_x = max(0, int(scaled_cursor.width() / 2))
+            hot_y = max(0, int(scaled_cursor.height() / 2))
+            self.btn_select_target.set_drag_cursor_pixmap(scaled_cursor, hot_x=hot_x, hot_y=hot_y)
         self.btn_load_top = QPushButton("Load Script")
         self.btn_load_top.clicked.connect(self.on_load_script)
         self.btn_load_top.setToolTip("Load script from JSON file.")
@@ -368,8 +379,8 @@ class MainWindow(QMainWindow):
                     Qt.AspectRatioMode.KeepAspectRatio,
                     Qt.TransformationMode.SmoothTransformation
                 )
-                hot_x = max(0, int(scaled_cursor.width() * 0.30))
-                hot_y = max(0, int(scaled_cursor.height() * 0.20))
+                hot_x = max(0, int(scaled_cursor.width() / 2))
+                hot_y = max(0, int(scaled_cursor.height() / 2))
                 btn.set_drag_cursor_pixmap(scaled_cursor, hot_x=hot_x, hot_y=hot_y)
             btn.action_dropped.connect(self.on_advanced_toolbar_drop)
             adv_toolbar.addWidget(btn)
