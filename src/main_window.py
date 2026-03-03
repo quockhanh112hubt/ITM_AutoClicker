@@ -2237,8 +2237,26 @@ class MainWindow(QMainWindow):
         key_token = self._from_hotkey_display(display_value)
         if not key_token:
             return
+
+        # Reserved hotkeys (not configurable in this settings section).
+        reserved_keys = {"f10"}
+        if key_token in reserved_keys:
+            self.statusBar.showMessage("This hotkey is reserved for another function")
+            self._updating_table = True
+            try:
+                combo = {
+                    "page_up": self.hotkey_page_up_combo,
+                    "page_down": self.hotkey_page_down_combo,
+                    "home": self.hotkey_home_combo,
+                    "end": self.hotkey_end_combo,
+                }.get(logical_key)
+                if combo:
+                    combo.setCurrentText(self._to_hotkey_display(self.hotkey_bindings[logical_key]))
+            finally:
+                self._updating_table = False
+            return
         
-        # Prevent duplicate bindings for these 3 actions.
+        # Prevent duplicate bindings across configurable hotkeys.
         existing = {k: v for k, v in self.hotkey_bindings.items() if k != logical_key}
         if key_token in existing.values():
             self.statusBar.showMessage("Hotkey already in use by another function")

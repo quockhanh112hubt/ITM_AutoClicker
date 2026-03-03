@@ -7,5 +7,6 @@
   "hotkey_end": "end",
   "drag_mode": "real",
   "use_real_mouse": false,
-  "always_on_top": true
+  "always_on_top": true,
+  "hotkey_home": "home"
 }

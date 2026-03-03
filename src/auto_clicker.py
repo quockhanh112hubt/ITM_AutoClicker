@@ -78,6 +78,8 @@ class AutoClicker:
         self._on_action_executed: Optional[Callable] = None
         self._priority_last_trigger_at = {}
         self._action_execution_totals = {}
+        self._next_action_index = 0
+        self._cycle_executed_by_index: Dict[int, bool] = {}
     
     def set_delay(self, delay_ms: int) -> None:
         """
@@ -171,8 +173,11 @@ class AutoClicker:
         
         self.current_script = script
         self.is_running = True
+        self.is_paused = False
         self._priority_last_trigger_at.clear()
         self._action_execution_totals.clear()
+        self._next_action_index = 0
+        self._cycle_executed_by_index = {}
         self._notify_status("Starting auto click...")
         
         self._execution_thread = threading.Thread(target=self._execute_loop, daemon=EXECUTION_THREAD_DAEMON)
@@ -204,58 +209,72 @@ class AutoClicker:
         return self.is_running and (not self.is_paused)
     
     def _execute_once(self) -> None:
-        """Execute script once"""
-        executed_by_index = {}
-        for action_index, action in enumerate(self.current_script.get_actions()):
-            if (not self.is_running) or self.is_paused:
-                break
-            
-            try:
-                if not self._can_execute_by_limit(action_index, action):
-                    executed_by_index[action_index] = False
-                    if not self._sleep_interruptible(self._get_action_delay_ms(action) / 1000.0):
-                        break
-                    if self.is_paused or (not self.is_running):
-                        break
-                    self._execute_priority_actions()
-                    continue
+        """Execute one action step and keep current index for pause/resume."""
+        actions = self.current_script.get_actions() if self.current_script else []
+        if not actions:
+            time.sleep(0.02)
+            return
+        if self._next_action_index < 0 or self._next_action_index >= len(actions):
+            self._next_action_index = 0
+            self._cycle_executed_by_index.clear()
 
-                parent_runtime_index = action.data.get("__parent_runtime_index")
-                if parent_runtime_index is not None:
-                    try:
-                        pidx = int(parent_runtime_index)
-                    except Exception:
-                        pidx = None
-                    if pidx is not None and not executed_by_index.get(pidx, False):
-                        executed_by_index[action_index] = False
-                        continue
+        action_index = int(self._next_action_index)
+        action = actions[action_index]
 
-                executed = False
-                if action.type == ClickType.POSITION:
-                    executed = self._execute_position_click(action)
-                elif action.type == ClickType.IMAGE:
-                    executed = self._execute_image_click(action)
-                elif action.type == ClickType.IMAGE_DIRECT:
-                    executed = self._execute_image_direct_click(action)
-                executed_by_index[action_index] = bool(executed)
-                
-                if executed:
-                    self._action_execution_totals[action_index] = int(self._action_execution_totals.get(action_index, 0)) + 1
-                    self._notify_action_executed(action_index)
-                
-                if (not self.is_running) or self.is_paused:
-                    break
-                
-                # Always wait delay after each action, including the last action in a cycle.
-                # This keeps timing consistent between ...->last and last->first.
+        # Prepare next index now, so resume continues from next action.
+        next_index = action_index + 1
+        if next_index >= len(actions):
+            next_index = 0
+            self._cycle_executed_by_index.clear()
+        self._next_action_index = next_index
+
+        if (not self.is_running) or self.is_paused:
+            return
+
+        try:
+            if not self._can_execute_by_limit(action_index, action):
+                self._cycle_executed_by_index[action_index] = False
                 if not self._sleep_interruptible(self._get_action_delay_ms(action) / 1000.0):
-                    break
+                    return
                 if self.is_paused or (not self.is_running):
-                    break
+                    return
                 self._execute_priority_actions()
-            except Exception as e:
-                executed_by_index[action_index] = False
-                self._notify_status(f"Error executing action: {e}")
+                return
+
+            parent_runtime_index = action.data.get("__parent_runtime_index")
+            if parent_runtime_index is not None:
+                try:
+                    pidx = int(parent_runtime_index)
+                except Exception:
+                    pidx = None
+                if pidx is not None and not self._cycle_executed_by_index.get(pidx, False):
+                    self._cycle_executed_by_index[action_index] = False
+                    return
+
+            executed = False
+            if action.type == ClickType.POSITION:
+                executed = self._execute_position_click(action)
+            elif action.type == ClickType.IMAGE:
+                executed = self._execute_image_click(action)
+            elif action.type == ClickType.IMAGE_DIRECT:
+                executed = self._execute_image_direct_click(action)
+            self._cycle_executed_by_index[action_index] = bool(executed)
+
+            if executed:
+                self._action_execution_totals[action_index] = int(self._action_execution_totals.get(action_index, 0)) + 1
+                self._notify_action_executed(action_index)
+
+            if (not self.is_running) or self.is_paused:
+                return
+
+            if not self._sleep_interruptible(self._get_action_delay_ms(action) / 1000.0):
+                return
+            if self.is_paused or (not self.is_running):
+                return
+            self._execute_priority_actions()
+        except Exception as e:
+            self._cycle_executed_by_index[action_index] = False
+            self._notify_status(f"Error executing action: {e}")
     
     def _execute_priority_actions(self) -> None:
         """Execute currently-triggered priority image actions in ascending priority order."""
@@ -1223,6 +1242,9 @@ class AutoClicker:
     def stop(self) -> None:
         """Stop execution"""
         self.is_running = False
+        self.is_paused = False
+        self._next_action_index = 0
+        self._cycle_executed_by_index.clear()
         if self._execution_thread:
             self._execution_thread.join(timeout=ACTION_EXECUTION_THREAD_TIMEOUT)
         self._notify_status("Stopped")
