@@ -24,10 +24,11 @@ from src.window_picker import WindowPickerDialog, Window, WindowPicker
 from src.action_options import choose_advanced_action, choose_advanced_action_by_choice
 from src.ui.dialogs import SettingsDialog
 from src.ui.recorders import PositionRecorder, ImageRecorder
-from src.ui.widgets import ScriptTreeWidget, DragCreateToolButton
+from src.ui.widgets import ScriptTreeWidget, DragCreateToolButton, DragSelectTargetButton
 from src.screen_action_recorder import ScreenActionRecorder
 from pynput import mouse
 import win32gui
+import win32con
 
 
 class MainWindow(QMainWindow):
@@ -144,8 +145,10 @@ class MainWindow(QMainWindow):
         target_title = QLabel("Target Window:")
         target_title.setStyleSheet("font-weight: bold;")
         self.target_info_label = QLabel("Not selected")
-        self.btn_select_target = QPushButton("Select Target")
+        self.btn_select_target = DragSelectTargetButton()
+        self.btn_select_target.setText("Select Target")
         self.btn_select_target.clicked.connect(self.on_select_target_window)
+        self.btn_select_target.target_dropped.connect(self.on_select_target_window_dropped)
         self.btn_select_target.setToolTip("Choose the target window for recording and execution.")
         self.btn_load_top = QPushButton("Load Script")
         self.btn_load_top.clicked.connect(self.on_load_script)
@@ -2459,6 +2462,46 @@ class MainWindow(QMainWindow):
         self.on_refresh_target_geometry()
         self._update_target_label()
         self.statusBar.showMessage(f"Target selected: {selected.title}")
+
+    def on_select_target_window_dropped(self, drop_x: int, drop_y: int):
+        """Quick select target by dragging Select Target button onto a window."""
+        try:
+            hwnd = win32gui.WindowFromPoint((int(drop_x), int(drop_y)))
+        except Exception:
+            self.statusBar.showMessage("Cannot detect window at drop position")
+            return
+        if not hwnd:
+            self.statusBar.showMessage("No window detected at drop position")
+            return
+
+        try:
+            root_hwnd = win32gui.GetAncestor(int(hwnd), win32con.GA_ROOT)
+            if not root_hwnd:
+                root_hwnd = int(hwnd)
+        except Exception:
+            root_hwnd = int(hwnd)
+
+        try:
+            own_hwnd = int(self.winId())
+        except Exception:
+            own_hwnd = 0
+
+        if int(root_hwnd) == own_hwnd:
+            self.statusBar.showMessage("Drop onto target app window (not ITM AutoClicker)")
+            return
+
+        try:
+            if not win32gui.IsWindow(int(root_hwnd)):
+                self.statusBar.showMessage("Dropped window is not valid")
+                return
+            title = win32gui.GetWindowText(int(root_hwnd)) or "Untitled"
+            class_name = win32gui.GetClassName(int(root_hwnd))
+            self.selected_target_window = Window(int(root_hwnd), str(title), str(class_name))
+            self.on_refresh_target_geometry()
+            self._update_target_label()
+            self.statusBar.showMessage(f"Target selected by drag: {title}")
+        except Exception as e:
+            self.statusBar.showMessage(f"Failed to select target by drag: {e}")
     
     def _update_target_label(self):
         """Update target info label in main tab"""

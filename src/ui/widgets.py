@@ -2,7 +2,7 @@
 Custom widget components for the GUI
 """
 from PyQt6.QtWidgets import (
-    QTreeWidget, QToolButton, QAbstractItemView, QMessageBox, QApplication
+    QTreeWidget, QToolButton, QPushButton, QAbstractItemView, QMessageBox, QApplication
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QCursor, QPixmap
@@ -178,6 +178,41 @@ class DragCreateToolButton(QToolButton):
         if event.button() == Qt.MouseButton.LeftButton and self._dragging:
             pos = mouse.Controller().position
             self.action_dropped.emit(self.choice_name, int(pos[0]), int(pos[1]))
+        self._press_pos = None
+        self._dragging = False
+        super().mouseReleaseEvent(event)
+
+
+class DragSelectTargetButton(QPushButton):
+    """Button that supports click-to-open picker and drag-drop quick target select."""
+
+    target_dropped = pyqtSignal(int, int)  # screen_x, screen_y
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._press_pos = None
+        self._dragging = False
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._press_pos = event.position().toPoint()
+            self._dragging = False
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._press_pos is not None:
+            if (event.position().toPoint() - self._press_pos).manhattanLength() >= QApplication.startDragDistance():
+                self._dragging = True
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self._dragging:
+            pos = QCursor.pos()
+            self.target_dropped.emit(int(pos.x()), int(pos.y()))
+            event.accept()
+            self._press_pos = None
+            self._dragging = False
+            return
         self._press_pos = None
         self._dragging = False
         super().mouseReleaseEvent(event)
