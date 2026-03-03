@@ -86,9 +86,11 @@ class MainWindow(QMainWindow):
         self._updating_table = False
         self.action_executed_signal.connect(self._on_action_executed_main_thread)
         self._ensure_default_group()
+        self._always_on_top_enabled = bool(self.config.get("always_on_top", False))
         
         # Setup UI
         self.setup_ui()
+        self._apply_always_on_top_to_main()
         
         # Update table
         self.update_table()
@@ -285,7 +287,7 @@ class MainWindow(QMainWindow):
             ("Scroll Down", "adv_scroll_down", "Scroll Down"),
             ("Mouse Hold Left", "adv_mouse_hold_left", "Mouse Hold Left"),
             ("Mouse Hold Right", "adv_mouse_hold_right", "Mouse Hold Right"),
-            ("Drag Left", "adv_drag_left", "Drag Left"),
+            ("Drag Drop", "adv_drag_left", "Drag Drop"),
             ("Key Press", "adv_key_press", "Key Press"),
             ("Hotkey", "adv_hotkey", "Hotkey"),
             ("Key Hold (Repeat)", "adv_key_hold_repeat", "Key Hold (Repeat)"),
@@ -421,6 +423,18 @@ class MainWindow(QMainWindow):
         mouse_mode_layout.addWidget(self.real_mouse_checkbox)
         mouse_mode_layout.addStretch()
         layout.addLayout(mouse_mode_layout)
+
+        # Always-on-top mode
+        ontop_layout = QHBoxLayout()
+        self.always_on_top_checkbox = QCheckBox("Always on top")
+        self.always_on_top_checkbox.setChecked(bool(self._always_on_top_enabled))
+        self.always_on_top_checkbox.toggled.connect(self.on_always_on_top_changed)
+        self.always_on_top_checkbox.setToolTip(
+            "Keep main window and child dialogs above other windows."
+        )
+        ontop_layout.addWidget(self.always_on_top_checkbox)
+        ontop_layout.addStretch()
+        layout.addLayout(ontop_layout)
         
         # Hotkey settings
         hotkey_title = QLabel("Hotkeys")
@@ -631,6 +645,7 @@ class MainWindow(QMainWindow):
     def on_add_action(self):
         """Handle add action button"""
         dialog = SettingsDialog(self)
+        self._apply_always_on_top_to_dialog(dialog)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._start_add_action_flow(dialog.get_selected_type())
 
@@ -1728,6 +1743,34 @@ class MainWindow(QMainWindow):
             self.statusBar.showMessage("Real mouse mode enabled: all actions will occupy mouse")
         else:
             self.statusBar.showMessage("Real mouse mode disabled: using non-occupy mode where supported")
+
+    def is_always_on_top_enabled(self) -> bool:
+        """Expose always-on-top state for child dialogs."""
+        return bool(self._always_on_top_enabled)
+
+    def _apply_always_on_top_to_dialog(self, dialog):
+        """Apply always-on-top flag to a child dialog."""
+        if dialog is None:
+            return
+        try:
+            dialog.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, bool(self._always_on_top_enabled))
+            dialog.show()
+        except Exception:
+            pass
+
+    def _apply_always_on_top_to_main(self):
+        """Apply always-on-top flag to main window."""
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, bool(self._always_on_top_enabled))
+        self.show()
+
+    def on_always_on_top_changed(self, checked: bool):
+        """Handle Always-on-top setting toggle."""
+        self._always_on_top_enabled = bool(checked)
+        self.config.set("always_on_top", self._always_on_top_enabled)
+        self._apply_always_on_top_to_main()
+        self.statusBar.showMessage(
+            "Always on top enabled" if self._always_on_top_enabled else "Always on top disabled"
+        )
     
     def on_hotkey_changed(self, logical_key: str, display_value: str):
         """Handle hotkey changed from settings."""

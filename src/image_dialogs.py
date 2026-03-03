@@ -20,6 +20,11 @@ class ImageConfirmationDialog(QDialog):
         self.setModal(True)
         self.setMinimumWidth(600)
         self.setMinimumHeight(500)
+        try:
+            if parent and hasattr(parent, "is_always_on_top_enabled") and parent.is_always_on_top_enabled():
+                self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        except Exception:
+            pass
         
         layout = QVBoxLayout()
         
@@ -89,6 +94,11 @@ class ClickPositionDialog(QDialog):
         self.setWindowTitle(f"Set Click Position for Image {image_num}")
         self.setModal(False)  # Non-modal so keyboard listener can still work
         self.setMinimumWidth(500)
+        try:
+            if parent and hasattr(parent, "is_always_on_top_enabled") and parent.is_always_on_top_enabled():
+                self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        except Exception:
+            pass
         
         layout = QVBoxLayout()
         

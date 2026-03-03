@@ -8,9 +8,26 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox,
     QKeySequenceEdit,
 )
-from PyQt6.QtCore import QTimer
-from PyQt6.QtGui import QKeySequence, QShortcut
+from PyQt6.QtCore import QTimer, Qt
+from PyQt6.QtGui import QKeySequence
 from PyQt6.QtGui import QCursor
+import win32api
+import win32con
+
+
+def _apply_always_on_top(dialog, parent):
+    """Apply always-on-top for dialogs when parent setting is enabled."""
+    try:
+        enabled = bool(getattr(parent, "is_always_on_top_enabled", lambda: False)())
+    except Exception:
+        enabled = False
+    if not enabled:
+        return
+    try:
+        dialog.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        dialog.show()
+    except Exception:
+        pass
 
 
 def _create_dialog(parent, title: str, label: str, items=None):
@@ -25,6 +42,7 @@ def _create_dialog(parent, title: str, label: str, items=None):
             dialog.setTextValue(items[0])
     pos = QCursor.pos()
     dialog.move(pos.x() + 12, pos.y() + 12)
+    _apply_always_on_top(dialog, parent)
     return dialog
 
 
@@ -101,12 +119,13 @@ def _ask_drag_ms(parent):
     return int(value)
 
 
-def _ask_drag_target_with_enter(parent, start_x: int, start_y: int):
+def _ask_drag_target_with_click(parent, start_x: int, start_y: int):
     dialog = QDialog(parent)
     dialog.setWindowTitle("Select Drag Target")
+    _apply_always_on_top(dialog, parent)
     layout = QVBoxLayout(dialog)
     layout.addWidget(QLabel(f"Start point: ({int(start_x)}, {int(start_y)})"))
-    layout.addWidget(QLabel("Move mouse to drop point, then press ENTER to confirm."))
+    layout.addWidget(QLabel("Move mouse to drop point, then LEFT CLICK to confirm."))
     coords_label = QLabel("")
     layout.addWidget(coords_label)
     buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel, parent=dialog)
@@ -115,22 +134,29 @@ def _ask_drag_target_with_enter(parent, start_x: int, start_y: int):
     pos = QCursor.pos()
     dialog.move(pos.x() + 12, pos.y() + 12)
 
-    def update_coords():
+    clicked_pos = {"value": None}
+    state = {"prev_down": bool(win32api.GetAsyncKeyState(win32con.VK_LBUTTON) & 0x8000)}
+
+    def poll_mouse():
         p = QCursor.pos()
         coords_label.setText(f"Current mouse: ({int(p.x())}, {int(p.y())})")
+        down = bool(win32api.GetAsyncKeyState(win32con.VK_LBUTTON) & 0x8000)
+        if down and not state["prev_down"]:
+            clicked_pos["value"] = (int(p.x()), int(p.y()))
+            dialog.accept()
+            return
+        state["prev_down"] = down
 
     timer = QTimer(dialog)
-    timer.timeout.connect(update_coords)
-    timer.start(60)
-    update_coords()
-
-    sc_return = QShortcut(QKeySequence("Return"), dialog)
-    sc_enter = QShortcut(QKeySequence("Enter"), dialog)
-    sc_return.activated.connect(dialog.accept)
-    sc_enter.activated.connect(dialog.accept)
+    timer.timeout.connect(poll_mouse)
+    timer.start(40)
+    poll_mouse()
 
     if dialog.exec() != QDialog.DialogCode.Accepted:
         return None
+
+    if clicked_pos["value"] is not None:
+        return clicked_pos["value"]
     p = QCursor.pos()
     return int(p.x()), int(p.y())
 
@@ -158,6 +184,7 @@ def _ask_key(parent, title: str, label: str, single_char: bool = False):
 def _ask_hotkey(parent):
     dialog = QDialog(parent)
     dialog.setWindowTitle("Hotkey")
+    _apply_always_on_top(dialog, parent)
     layout = QVBoxLayout(dialog)
     layout.addWidget(QLabel("Press your hotkey combination:"))
     key_edit = QKeySequenceEdit(dialog)
@@ -193,7 +220,7 @@ def choose_advanced_action(parent, start_x: int | None = None, start_y: int | No
         "Scroll Down",
         "Mouse Hold Left",
         "Mouse Hold Right",
-        "Drag Left",
+        "Drag Drop",
         "Key Press",
         "Hotkey",
         "Key Hold (Repeat)",
@@ -237,11 +264,11 @@ def choose_advanced_action_by_choice(parent, choice: str, start_x: int | None = 
         if hold_ms is None:
             return None
         return {"action_mode": "mouse_hold", "mouse_button": "right", "hold_ms": hold_ms}
-    if choice == "Drag Left":
+    if choice == "Drag Drop":
         if start_x is None or start_y is None:
             p = QCursor.pos()
             start_x, start_y = int(p.x()), int(p.y())
-        target = _ask_drag_target_with_enter(parent, int(start_x), int(start_y))
+        target = _ask_drag_target_with_click(parent, int(start_x), int(start_y))
         if not target:
             return None
         drag_to_x, drag_to_y = target

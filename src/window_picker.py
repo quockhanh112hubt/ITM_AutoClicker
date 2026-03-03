@@ -82,6 +82,11 @@ class WindowPickerDialog(QDialog):
         self.setWindowTitle("Select Target Window")
         self.setMinimumSize(600, 400)
         self.setModal(True)
+        try:
+            if parent and hasattr(parent, "is_always_on_top_enabled") and parent.is_always_on_top_enabled():
+                self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        except Exception:
+            pass
         
         self.selected_window: Optional[Window] = None
         
