@@ -8,5 +8,6 @@
   "drag_mode": "real",
   "use_real_mouse": false,
   "always_on_top": true,
-  "hotkey_home": "home"
+  "hotkey_home": "home",
+  "hotkey_record": "f10"
 }

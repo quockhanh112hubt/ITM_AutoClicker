@@ -63,6 +63,7 @@ class MainWindow(QMainWindow):
         self.keyboard_listener = KeyboardListener()
         self.keyboard_listener.set_binding('home', self.hotkey_bindings['home'])
         self.keyboard_listener.set_binding('end', self.hotkey_bindings['end'])
+        self.keyboard_listener.set_binding('f10', self.hotkey_bindings['record'])
         self.keyboard_listener.register_callback('home', self.on_home_hotkey_pressed)
         self.keyboard_listener.register_callback('end', self.on_end_hotkey_pressed)
         self.keyboard_listener.register_callback('f10', self.on_screen_record_hotkey_pressed)
@@ -286,10 +287,7 @@ class MainWindow(QMainWindow):
         self.btn_tool_record_screen.setCheckable(True)
         self.btn_tool_record_screen.setMinimumWidth(128)
         self.btn_tool_record_screen.setMinimumHeight(56)
-        self.btn_tool_record_screen.setToolTip(
-            "Record all keyboard/mouse actions on screen.\n"
-            "Press F10 to start recording, press F10 again to stop."
-        )
+        self.btn_tool_record_screen.setToolTip("")
         if self._icons.get("record_screen") and not self._icons.get("record_screen").isNull():
             self.btn_tool_record_screen.setIcon(self._icons.get("record_screen"))
             self.btn_tool_record_screen.setIconSize(QPixmap(40, 40).size())
@@ -302,6 +300,7 @@ class MainWindow(QMainWindow):
             self.btn_tool_image_direct,
             self.btn_tool_record_screen,
         ]
+        self._update_record_hotkey_ui()
         self._apply_action_toolbar_button_style()
 
         action_toolbar.addStretch()
@@ -600,6 +599,22 @@ class MainWindow(QMainWindow):
         hk_stop_layout.addWidget(self.hotkey_end_combo)
         hk_stop_layout.addStretch()
         layout.addLayout(hk_stop_layout)
+
+        hk_record_layout = QHBoxLayout()
+        hk_record_label = QLabel("Record Screen Toggle:")
+        self.hotkey_record_combo = QComboBox()
+        self.hotkey_record_combo.addItems(self.hotkey_options)
+        record_text = self._to_hotkey_display(self.hotkey_bindings["record"])
+        if self.hotkey_record_combo.findText(record_text) < 0:
+            self.hotkey_record_combo.addItem(record_text)
+        self.hotkey_record_combo.setCurrentText(record_text)
+        self.hotkey_record_combo.currentTextChanged.connect(
+            lambda text: self.on_hotkey_changed("record", text)
+        )
+        hk_record_layout.addWidget(hk_record_label)
+        hk_record_layout.addWidget(self.hotkey_record_combo)
+        hk_record_layout.addStretch()
+        layout.addLayout(hk_record_layout)
         
         layout.addStretch()
         
@@ -887,9 +902,12 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "Record Screen Action",
-            "Press F10 to start recording.\nPress F10 again to stop recording."
+            f"Press {self._to_hotkey_display(self.hotkey_bindings['record'])} to start recording.\n"
+            f"Press {self._to_hotkey_display(self.hotkey_bindings['record'])} again to stop recording."
         )
-        self.statusBar.showMessage("Record Screen armed: press F10 to start")
+        self.statusBar.showMessage(
+            f"Record Screen armed: press {self._to_hotkey_display(self.hotkey_bindings['record'])} to start"
+        )
 
     def on_screen_record_hotkey_pressed(self):
         """Handle global F10 toggle for screen recording."""
@@ -1054,7 +1072,7 @@ class MainWindow(QMainWindow):
         deci = int((elapsed - int(elapsed)) * 10)
         self.statusBar.showMessage(
             f"[REC] Screen recording {minutes:02d}:{seconds:02d}.{deci} | "
-            f"actions: {action_count} | F10=stop"
+            f"actions: {action_count} | {self._to_hotkey_display(self.hotkey_bindings['record'])}=stop"
         )
     
     def on_add_branch(self):
@@ -1930,8 +1948,18 @@ class MainWindow(QMainWindow):
             "page_down": str(self.config.get("hotkey_page_down", "page_down")),
             "home": str(self.config.get("hotkey_home", "home")),
             "end": str(self.config.get("hotkey_end", "end")),
+            "record": str(self.config.get("hotkey_record", "f10")),
         }
         return bindings
+
+    def _update_record_hotkey_ui(self):
+        """Refresh record-screen hotkey hints/tooltips."""
+        key_text = self._to_hotkey_display(self.hotkey_bindings.get("record", "f10"))
+        if self.btn_tool_record_screen:
+            self.btn_tool_record_screen.setToolTip(
+                "Record all keyboard/mouse actions on screen.\n"
+                f"Press {key_text} to start recording, press {key_text} again to stop."
+            )
     
     def _get_recording_hotkeys(self) -> dict:
         """Get recording hotkey mapping for listeners."""
@@ -2238,24 +2266,6 @@ class MainWindow(QMainWindow):
         if not key_token:
             return
 
-        # Reserved hotkeys (not configurable in this settings section).
-        reserved_keys = {"f10"}
-        if key_token in reserved_keys:
-            self.statusBar.showMessage("This hotkey is reserved for another function")
-            self._updating_table = True
-            try:
-                combo = {
-                    "page_up": self.hotkey_page_up_combo,
-                    "page_down": self.hotkey_page_down_combo,
-                    "home": self.hotkey_home_combo,
-                    "end": self.hotkey_end_combo,
-                }.get(logical_key)
-                if combo:
-                    combo.setCurrentText(self._to_hotkey_display(self.hotkey_bindings[logical_key]))
-            finally:
-                self._updating_table = False
-            return
-        
         # Prevent duplicate bindings across configurable hotkeys.
         existing = {k: v for k, v in self.hotkey_bindings.items() if k != logical_key}
         if key_token in existing.values():
@@ -2268,6 +2278,7 @@ class MainWindow(QMainWindow):
                     "page_down": self.hotkey_page_down_combo,
                     "home": self.hotkey_home_combo,
                     "end": self.hotkey_end_combo,
+                    "record": self.hotkey_record_combo,
                 }.get(logical_key)
                 if combo:
                     combo.setCurrentText(self._to_hotkey_display(self.hotkey_bindings[logical_key]))
@@ -2284,6 +2295,9 @@ class MainWindow(QMainWindow):
             self.keyboard_listener.set_binding("end", key_token)
             self.btn_stop.setText(f"Stop ({self._to_hotkey_display(key_token)})")
             self._update_run_button_states(self.auto_clicker.is_running)
+        if logical_key == "record":
+            self.keyboard_listener.set_binding("f10", key_token)
+            self._update_record_hotkey_ui()
         self.statusBar.showMessage(f"Hotkey {logical_key} set to {self._to_hotkey_display(key_token)}")
     
     def on_status_changed(self, message: str):
