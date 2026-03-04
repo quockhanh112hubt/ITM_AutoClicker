@@ -223,9 +223,10 @@ class AutoClicker:
 
         # Prepare next index now, so resume continues from next action.
         next_index = action_index + 1
+        will_wrap_cycle = False
         if next_index >= len(actions):
             next_index = 0
-            self._cycle_executed_by_index.clear()
+            will_wrap_cycle = True
         self._next_action_index = next_index
 
         if (not self.is_running) or self.is_paused:
@@ -264,6 +265,11 @@ class AutoClicker:
                 self._action_execution_totals[action_index] = int(self._action_execution_totals.get(action_index, 0)) + 1
                 self._notify_action_executed(action_index)
 
+            # Clear cycle results only after the last action in the cycle
+            # has already consumed parent states.
+            if will_wrap_cycle:
+                self._cycle_executed_by_index.clear()
+
             if (not self.is_running) or self.is_paused:
                 return
 
@@ -274,6 +280,8 @@ class AutoClicker:
             self._execute_priority_actions()
         except Exception as e:
             self._cycle_executed_by_index[action_index] = False
+            if will_wrap_cycle:
+                self._cycle_executed_by_index.clear()
             self._notify_status(f"Error executing action: {e}")
     
     def _execute_priority_actions(self) -> None:
