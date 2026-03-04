@@ -365,30 +365,15 @@ class AutoClicker:
             if cooldown_ms > 0 and (now - last) * 1000.0 < cooldown_ms:
                 continue
 
-            image_path = str(action.data.get("__if_image_path", "") or "")
-            if not image_path or (not os.path.exists(image_path)):
-                continue
-            target_hwnd = action.data.get("target_hwnd")
-            target_title = action.data.get("target_title", "")
-            is_found = False
-            if target_hwnd is not None:
-                try:
-                    th = int(target_hwnd)
-                    ok, error = self._validate_target_window(th)
-                    if not ok:
-                        self._stop_due_to_target_error(error, target_title)
-                        return
-                    is_found = self.image_matcher.find_image_in_window(image_path, th) is not None
-                except Exception:
-                    is_found = False
+            condition_type = str(action.data.get("if_condition_type", "image_visible")).strip().lower()
+            cond_raw = False
+            if condition_type == "ocr_compare":
+                cond_raw = self._evaluate_if_ocr_condition(action, actions)
             else:
-                try:
-                    is_found = self.image_matcher.find_image(image_path) is not None
-                except Exception:
-                    is_found = False
+                cond_raw = self._evaluate_if_image_visible_condition(action)
 
             mode = str(action.data.get("if_mode", "if")).strip().lower()
-            cond_ok = bool(is_found) if mode != "if_not" else (not bool(is_found))
+            cond_ok = bool(cond_raw) if mode != "if_not" else (not bool(cond_raw))
             if not cond_ok:
                 continue
 
@@ -412,6 +397,17 @@ class AutoClicker:
                 self._notify_status(f"Stopped by IF rule: {source_name}")
                 return
 
+            if then_action == "run_action":
+                ra_idx = action.data.get("__run_action_runtime_index")
+                try:
+                    ra = int(ra_idx)
+                except Exception:
+                    ra = None
+                if ra is not None and 0 <= ra < len(actions):
+                    self._pending_runtime_indices = [int(ra)] + list(self._pending_runtime_indices)
+                    self._notify_status("IF triggered: run action now (1 step)")
+                continue
+
             run_indices = action.data.get("__run_branch_runtime_indices") or []
             queue = []
             for ridx in run_indices:
@@ -425,6 +421,99 @@ class AutoClicker:
                 # Run target branch immediately, then continue previous flow.
                 self._pending_runtime_indices = queue + list(self._pending_runtime_indices)
                 self._notify_status(f"IF triggered: run branch now ({len(queue)} step(s))")
+
+    def _evaluate_if_image_visible_condition(self, action: ClickAction) -> bool:
+        """Evaluate IF condition based on image visibility."""
+        image_path = str(action.data.get("__if_image_path", "") or "")
+        if not image_path or (not os.path.exists(image_path)):
+            return False
+        target_hwnd = action.data.get("target_hwnd")
+        target_title = action.data.get("target_title", "")
+        is_found = False
+        if target_hwnd is not None:
+            try:
+                th = int(target_hwnd)
+                ok, error = self._validate_target_window(th)
+                if not ok:
+                    self._stop_due_to_target_error(error, target_title)
+                    return False
+                is_found = self.image_matcher.find_image_in_window(image_path, th) is not None
+            except Exception:
+                is_found = False
+        else:
+            try:
+                is_found = self.image_matcher.find_image(image_path) is not None
+            except Exception:
+                is_found = False
+        return bool(is_found)
+
+    def _parse_numeric_value(self, text: str) -> Optional[float]:
+        """Parse a numeric value from OCR text."""
+        raw = str(text or "").strip()
+        if not raw:
+            return None
+        # Keep first numeric token-like string.
+        import re
+        m = re.search(r"[-+]?\d[\d.,]*", raw)
+        if not m:
+            return None
+        token = m.group(0).replace(" ", "")
+        # Normalize separators.
+        if "," in token and "." in token:
+            # Assume comma thousands separator.
+            token = token.replace(",", "")
+        elif "," in token:
+            token = token.replace(",", ".")
+        try:
+            return float(token)
+        except Exception:
+            return None
+
+    def _evaluate_if_ocr_condition(self, action: ClickAction, actions: list[ClickAction]) -> bool:
+        """Evaluate IF condition from IMAGE_RECOGNITION value."""
+        src_idx = action.data.get("__if_source_runtime_index")
+        try:
+            si = int(src_idx)
+        except Exception:
+            return False
+        if si < 0 or si >= len(actions):
+            return False
+        src_action = actions[si]
+        if src_action.type != ClickType.IMAGE_RECOGNITION:
+            return False
+
+        actual = str(src_action.data.get("last_recognized_value", "") or "")
+        cmp_val = str(action.data.get("if_ocr_compare_value", "") or "")
+        val_type = str(action.data.get("if_ocr_value_type", "number")).strip().lower()
+        op = str(action.data.get("if_ocr_operator", "eq")).strip().lower()
+
+        if val_type == "number":
+            a = self._parse_numeric_value(actual)
+            b = self._parse_numeric_value(cmp_val)
+            if a is None or b is None:
+                return False
+            if op == "gt":
+                return a > b
+            if op == "gte":
+                return a >= b
+            if op == "lt":
+                return a < b
+            if op == "lte":
+                return a <= b
+            if op == "neq":
+                return a != b
+            return a == b
+
+        # text mode
+        actual_low = actual.lower()
+        cmp_low = cmp_val.lower()
+        if op == "contains":
+            return cmp_low in actual_low
+        if op == "not_contains":
+            return cmp_low not in actual_low
+        if op == "not_equals":
+            return actual_low != cmp_low
+        return actual_low == cmp_low
     
     def _execute_priority_actions(self) -> None:
         """Execute currently-triggered priority image actions in ascending priority order."""

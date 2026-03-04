@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QTabWidget,
     QLabel, QSpinBox, QFileDialog, QMessageBox, QDialog,
     QDialogButtonBox, QRadioButton, QButtonGroup, QStatusBar, QFormLayout,
-    QComboBox, QTreeWidget, QTreeWidgetItem, QInputDialog, QToolButton, QCheckBox, QMenu, QApplication,
+    QComboBox, QTreeWidget, QTreeWidgetItem, QInputDialog, QToolButton, QCheckBox, QMenu, QApplication, QLineEdit,
     QAbstractItemView
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
@@ -1526,7 +1526,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "Add IF",
-                "No IMAGE/IMAGE DIRECT action found.\nPlease add at least one image-based action first."
+                "No image-related source action found.\nPlease add IMAGE / IMAGE DIRECT / IMAGE RECOGNITION first."
             )
             return
 
@@ -1537,10 +1537,16 @@ class MainWindow(QMainWindow):
         action = ClickAction(
             ClickType.IF,
             if_mode=str(if_data.get("if_mode", "if")),
+            if_condition_type=str(if_data.get("if_condition_type", "image_visible")),
+            if_ocr_value_type=str(if_data.get("if_ocr_value_type", "number")),
+            if_ocr_operator=str(if_data.get("if_ocr_operator", "eq")),
+            if_ocr_compare_value=str(if_data.get("if_ocr_compare_value", "")),
             source_action_id=str(if_data.get("source_action_id", "")),
             source_action_name=str(if_data.get("source_action_name", "")),
             then_action=str(if_data.get("then_action", "run_branch")),
             target_branch_index=if_data.get("target_branch_index"),
+            target_action_id=if_data.get("target_action_id"),
+            target_action_name=if_data.get("target_action_name"),
             priority_level=int(if_data.get("priority_level", 0) or 0),
             if_cooldown_ms=int(if_data.get("if_cooldown_ms", 500) or 0),
             delay_ms=0,
@@ -1606,6 +1612,7 @@ class MainWindow(QMainWindow):
                     "group_index": gi,
                     "group_name": gname,
                     "action_index": ai,
+                    "action_type": action.type.value,
                 })
         return options
 
@@ -1624,11 +1631,30 @@ class MainWindow(QMainWindow):
 
         source_combo = QComboBox()
         for opt in source_options:
-            source_combo.addItem(f"{opt['name']} [{opt['group_name']}]", opt)
+            type_label = str(opt.get("action_type", "")).replace("_", " ").upper()
+            source_combo.addItem(f"{opt['name']} [{opt['group_name']}] ({type_label})", opt)
         form.addRow("Source Action:", source_combo)
+
+        condition_combo = QComboBox()
+        condition_combo.addItem("Image Visible / Not Visible", "image_visible")
+        condition_combo.addItem("OCR Value Compare", "ocr_compare")
+        form.addRow("Condition:", condition_combo)
+
+        ocr_type_combo = QComboBox()
+        ocr_type_combo.addItem("Number", "number")
+        ocr_type_combo.addItem("Text", "text")
+        form.addRow("OCR Value Type:", ocr_type_combo)
+
+        ocr_op_combo = QComboBox()
+        form.addRow("Operator:", ocr_op_combo)
+
+        ocr_value_edit = QLineEdit()
+        ocr_value_edit.setPlaceholderText("Compare value")
+        form.addRow("Compare Value:", ocr_value_edit)
 
         then_combo = QComboBox()
         then_combo.addItem("Run Branch", "run_branch")
+        then_combo.addItem("Run Action", "run_action")
         then_combo.addItem("Stop", "stop")
         form.addRow("Then:", then_combo)
 
@@ -1636,6 +1662,26 @@ class MainWindow(QMainWindow):
         for gi, group in enumerate(self.script_groups):
             target_combo.addItem(str(group.get("name", f"Branch {gi+1}")), gi)
         form.addRow("Target Branch:", target_combo)
+
+        target_action_combo = QComboBox()
+        all_actions = []
+        for gi, group in enumerate(self.script_groups):
+            gname = str(group.get("name", f"Branch {gi+1}"))
+            for ai, entry in enumerate(group.get("actions", [])):
+                aid = str(entry.get("id") or "")
+                if not aid:
+                    continue
+                name = str(entry.get("name", f"Action {ai+1}"))
+                all_actions.append({
+                    "id": aid,
+                    "name": name,
+                    "group_name": gname,
+                    "group_index": gi,
+                    "action_index": ai,
+                })
+        for opt in all_actions:
+            target_action_combo.addItem(f"{opt['name']} [{opt['group_name']}]", opt)
+        form.addRow("Target Action:", target_action_combo)
 
         priority_spin = QSpinBox()
         priority_spin.setRange(0, 20)
@@ -1647,10 +1693,40 @@ class MainWindow(QMainWindow):
         cooldown_spin.setValue(500)
         form.addRow("Cooldown (ms):", cooldown_spin)
 
-        def _sync_then_state():
-            target_combo.setEnabled(str(then_combo.currentData()) == "run_branch")
+        def _sync_ocr_ops():
+            ocr_op_combo.blockSignals(True)
+            ocr_op_combo.clear()
+            val_type = str(ocr_type_combo.currentData() or "number")
+            if val_type == "number":
+                ocr_op_combo.addItem(">", "gt")
+                ocr_op_combo.addItem(">=", "gte")
+                ocr_op_combo.addItem("<", "lt")
+                ocr_op_combo.addItem("<=", "lte")
+                ocr_op_combo.addItem("==", "eq")
+                ocr_op_combo.addItem("!=", "neq")
+            else:
+                ocr_op_combo.addItem("contains", "contains")
+                ocr_op_combo.addItem("not contains", "not_contains")
+                ocr_op_combo.addItem("equals", "equals")
+                ocr_op_combo.addItem("not equals", "not_equals")
+            ocr_op_combo.blockSignals(False)
 
+        def _sync_condition_state():
+            is_ocr = str(condition_combo.currentData()) == "ocr_compare"
+            ocr_type_combo.setEnabled(is_ocr)
+            ocr_op_combo.setEnabled(is_ocr)
+            ocr_value_edit.setEnabled(is_ocr)
+
+        def _sync_then_state():
+            then_mode = str(then_combo.currentData())
+            target_combo.setEnabled(then_mode == "run_branch")
+            target_action_combo.setEnabled(then_mode == "run_action")
+
+        ocr_type_combo.currentIndexChanged.connect(_sync_ocr_ops)
+        condition_combo.currentIndexChanged.connect(_sync_condition_state)
         then_combo.currentIndexChanged.connect(_sync_then_state)
+        _sync_ocr_ops()
+        _sync_condition_state()
         _sync_then_state()
 
         layout.addLayout(form)
@@ -1664,14 +1740,49 @@ class MainWindow(QMainWindow):
         source_opt = source_combo.currentData()
         if not isinstance(source_opt, dict):
             return None
+
+        condition_type = str(condition_combo.currentData() or "image_visible")
+        source_action_type = str(source_opt.get("action_type", ""))
+        if condition_type == "ocr_compare" and source_action_type != ClickType.IMAGE_RECOGNITION.value:
+            QMessageBox.warning(
+                self,
+                "Invalid IF Source",
+                "OCR Value Compare requires source action type IMAGE RECOGNITION."
+            )
+            return None
+
+        ocr_value = str(ocr_value_edit.text() or "").strip()
+        if condition_type == "ocr_compare" and not ocr_value:
+            QMessageBox.warning(self, "Invalid IF", "Please enter OCR compare value.")
+            return None
+
         then_action = str(then_combo.currentData() or "run_branch")
         target_branch_index = int(target_combo.currentData()) if then_action == "run_branch" else None
+        target_action_opt = target_action_combo.currentData() if then_action == "run_action" else None
+        target_action_id = None
+        target_action_name = None
+        if then_action == "run_action":
+            if not isinstance(target_action_opt, dict):
+                QMessageBox.warning(self, "Invalid IF", "Please select a target action.")
+                return None
+            target_action_id = str(target_action_opt.get("id", ""))
+            target_action_name = str(target_action_opt.get("name", ""))
+            if not target_action_id:
+                QMessageBox.warning(self, "Invalid IF", "Target action id is missing.")
+                return None
+
         return {
             "if_mode": "if_not" if mode_combo.currentText().strip().upper() == "IF NOT" else "if",
+            "if_condition_type": condition_type,
+            "if_ocr_value_type": str(ocr_type_combo.currentData() or "number"),
+            "if_ocr_operator": str(ocr_op_combo.currentData() or "eq"),
+            "if_ocr_compare_value": ocr_value,
             "source_action_id": str(source_opt.get("id", "")),
             "source_action_name": str(source_opt.get("name", "")),
             "then_action": then_action,
             "target_branch_index": target_branch_index,
+            "target_action_id": target_action_id,
+            "target_action_name": target_action_name,
             "priority_level": int(priority_spin.value()),
             "if_cooldown_ms": int(cooldown_spin.value()),
         }
@@ -2669,6 +2780,7 @@ class MainWindow(QMainWindow):
         """Build executable flat script from current tree hierarchy/check states."""
         script = ClickScript()
         key_map: list[tuple[int, int]] = []
+        action_id_to_runtime_index: dict[str, int] = {}
 
         # Ensure each action has a stable id for later operations.
         for group in self.script_groups:
@@ -2712,6 +2824,9 @@ class MainWindow(QMainWindow):
             runtime_index = len(script.get_actions())
             script.add_action(runtime_action)
             key_map.append((group_index, action_index))
+            action_id = str(entry.get("id") or "")
+            if action_id:
+                action_id_to_runtime_index[action_id] = int(runtime_index)
 
             for i in range(item.childCount()):
                 add_tree_action_node(item.child(i), runtime_index, True)
@@ -2761,6 +2876,9 @@ class MainWindow(QMainWindow):
             source_id = str(act.data.get("source_action_id", "") or "")
             if_path = id_to_image_path.get(source_id, "")
             act.data["__if_image_path"] = if_path
+            source_runtime_index = action_id_to_runtime_index.get(source_id)
+            if source_runtime_index is not None:
+                act.data["__if_source_runtime_index"] = int(source_runtime_index)
             target_bi = act.data.get("target_branch_index")
             try:
                 target_bi_int = int(target_bi) if target_bi is not None else None
@@ -2769,6 +2887,11 @@ class MainWindow(QMainWindow):
             if target_bi_int is not None:
                 indices = [int(x) for x in branch_runtime_indices.get(target_bi_int, []) if int(x) != int(r_idx)]
                 act.data["__run_branch_runtime_indices"] = indices
+            target_action_id = str(act.data.get("target_action_id", "") or "")
+            if target_action_id:
+                run_action_runtime_idx = action_id_to_runtime_index.get(target_action_id)
+                if run_action_runtime_idx is not None and int(run_action_runtime_idx) != int(r_idx):
+                    act.data["__run_action_runtime_index"] = int(run_action_runtime_idx)
 
         return script, key_map
     
@@ -2852,9 +2975,32 @@ class MainWindow(QMainWindow):
             mode = str(action.data.get("if_mode", "if")).strip().lower()
             mode_txt = "IF NOT" if mode == "if_not" else "IF"
             source_name = str(action.data.get("source_action_name", "-"))
+            cond_type = str(action.data.get("if_condition_type", "image_visible")).strip().lower()
+            if cond_type == "ocr_compare":
+                val_type = str(action.data.get("if_ocr_value_type", "number")).strip().lower()
+                op = str(action.data.get("if_ocr_operator", "eq")).strip().lower()
+                cmp_val = str(action.data.get("if_ocr_compare_value", "")).strip()
+                op_map = {
+                    "gt": ">",
+                    "gte": ">=",
+                    "lt": "<",
+                    "lte": "<=",
+                    "eq": "==",
+                    "neq": "!=",
+                    "contains": "contains",
+                    "not_contains": "not contains",
+                    "equals": "equals",
+                    "not_equals": "not equals",
+                }
+                cond_txt = f"OCR[{val_type}] {op_map.get(op, op)} '{cmp_val}' from {source_name}"
+            else:
+                cond_txt = f"{source_name} image visible"
             then_action = str(action.data.get("then_action", "run_branch")).strip().lower()
             if then_action == "stop":
                 then_txt = "STOP"
+            elif then_action == "run_action":
+                action_name = str(action.data.get("target_action_name", "") or "")
+                then_txt = f"RUN ACTION {action_name or action.data.get('target_action_id', '-')}"
             else:
                 tgt_idx = action.data.get("target_branch_index")
                 tgt_name = ""
@@ -2865,7 +3011,7 @@ class MainWindow(QMainWindow):
                     tgt_name = ""
                 then_txt = f"RUN BRANCH {tgt_name or str(tgt_idx)}"
             cooldown_ms = int(action.data.get("if_cooldown_ms", 500) or 0)
-            return f"{mode_txt} [{source_name} image visible] -> {then_txt} | Cooldown: {cooldown_ms}ms"
+            return f"{mode_txt} [{cond_txt}] -> {then_txt} | Cooldown: {cooldown_ms}ms"
 
         if action.type == ClickType.POSITION:
             x = action.data.get('x', 0)
