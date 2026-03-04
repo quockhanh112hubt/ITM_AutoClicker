@@ -408,6 +408,7 @@ class MainWindow(QMainWindow):
         self.script_tree.setColumnWidth(6, 80)
         self.script_tree.setColumnWidth(7, 340)
         self.script_tree.setEditTriggers(QTreeWidget.EditTrigger.NoEditTriggers)
+        self.script_tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.script_tree.setDragEnabled(True)
         self.script_tree.viewport().setAcceptDrops(True)
         self.script_tree.setAcceptDrops(True)
@@ -1651,60 +1652,118 @@ class MainWindow(QMainWindow):
         self.statusBar.showMessage("Action order updated")
 
     def on_replace_action_requested(self, source_payload, target_payload):
-        """Handle setting parent-child relation (drag source onto target action)."""
+        """Handle setting parent-child relation (drag source(s) onto target action)."""
         if self.auto_clicker.is_running:
             self.statusBar.showMessage("Cannot update parent-child while running")
             self.update_table()
             return
 
+        if not (isinstance(target_payload, tuple) and len(target_payload) >= 3 and target_payload[0] == "action"):
+            return
         try:
-            src_gi, src_ai = int(source_payload[1]), int(source_payload[2])
             tgt_gi, tgt_ai = int(target_payload[1]), int(target_payload[2])
         except Exception:
             return
-        if src_gi == tgt_gi and src_ai == tgt_ai:
-            return
-        if src_gi < 0 or src_gi >= len(self.script_groups):
-            return
         if tgt_gi < 0 or tgt_gi >= len(self.script_groups):
             return
-
-        src_actions = self.script_groups[src_gi].get("actions", [])
         tgt_actions = self.script_groups[tgt_gi].get("actions", [])
-        if src_ai < 0 or src_ai >= len(src_actions):
-            return
         if tgt_ai < 0 or tgt_ai >= len(tgt_actions):
             return
 
-        src_entry = src_actions[src_ai]
         tgt_entry = tgt_actions[tgt_ai]
-        src_id = str(src_entry.get("id") or uuid.uuid4().hex)
         tgt_id = str(tgt_entry.get("id") or uuid.uuid4().hex)
-        src_entry["id"] = src_id
         tgt_entry["id"] = tgt_id
 
-        # Prevent cycle (target cannot be inside source subtree).
-        if src_gi == tgt_gi:
-            by_id = {str(e.get("id")): e for e in src_actions if e.get("id")}
-            cursor = tgt_id
-            while cursor:
-                if cursor == src_id:
-                    self.statusBar.showMessage("Invalid parent-child: cycle detected")
-                    return
-                parent_entry = by_id.get(cursor)
-                cursor = str(parent_entry.get("parent_id")) if parent_entry and parent_entry.get("parent_id") else None
+        # Normalize source payload(s).
+        if isinstance(source_payload, list):
+            raw_sources = source_payload
+        else:
+            raw_sources = [source_payload]
+        source_items = []
+        for sp in raw_sources:
+            if not (isinstance(sp, tuple) and len(sp) >= 3 and sp[0] == "action"):
+                continue
+            try:
+                sgi, sai = int(sp[1]), int(sp[2])
+            except Exception:
+                continue
+            if sgi < 0 or sgi >= len(self.script_groups):
+                continue
+            actions = self.script_groups[sgi].get("actions", [])
+            if sai < 0 or sai >= len(actions):
+                continue
+            src_entry = actions[sai]
+            src_id = str(src_entry.get("id") or uuid.uuid4().hex)
+            src_entry["id"] = src_id
+            if src_id == tgt_id:
+                continue
+            source_items.append((sgi, sai, src_id))
 
-        # Apply parent relation.
-        src_entry["parent_id"] = tgt_id
+        # De-duplicate by source id, keep stable order.
+        dedup = []
+        seen_ids = set()
+        for sgi, sai, sid in sorted(source_items, key=lambda x: (x[0], x[1])):
+            if sid in seen_ids:
+                continue
+            seen_ids.add(sid)
+            dedup.append((sgi, sai, sid))
+        source_items = dedup
+        if not source_items:
+            return
 
-        # If assigning across branches, move source action into target branch.
-        if src_gi != tgt_gi:
-            moved = src_actions.pop(src_ai)
-            tgt_actions.append(moved)
+        def _find_action_location(action_id: str):
+            for gi, group in enumerate(self.script_groups):
+                actions = group.get("actions", [])
+                for ai, entry in enumerate(actions):
+                    if str(entry.get("id")) == str(action_id):
+                        return gi, ai, entry
+            return None, None, None
+
+        moved_count = 0
+        blocked_count = 0
+        for _, _, src_id in source_items:
+            current = _find_action_location(src_id)
+            target_now = _find_action_location(tgt_id)
+            if current[0] is None or target_now[0] is None:
+                continue
+            src_gi, src_ai, src_entry = current
+            cur_tgt_gi, _, _ = target_now
+
+            # Prevent cycle (target cannot be in source subtree).
+            if src_gi == cur_tgt_gi:
+                by_id = {str(e.get("id")): e for e in self.script_groups[src_gi].get("actions", []) if e.get("id")}
+                cursor = str(tgt_id)
+                cycle = False
+                while cursor:
+                    if cursor == str(src_id):
+                        cycle = True
+                        break
+                    parent_entry = by_id.get(cursor)
+                    cursor = str(parent_entry.get("parent_id")) if parent_entry and parent_entry.get("parent_id") else None
+                if cycle:
+                    blocked_count += 1
+                    continue
+
+            # Move across branches if needed.
+            if src_gi != cur_tgt_gi:
+                src_actions = self.script_groups[src_gi].get("actions", [])
+                moved_entry = src_actions.pop(src_ai)
+                self.script_groups[cur_tgt_gi].setdefault("actions", []).append(moved_entry)
+                src_entry = moved_entry
+
+            src_entry["parent_id"] = str(tgt_id)
+            moved_count += 1
 
         self._last_selected_branch_index = tgt_gi
         self.update_table()
-        self.statusBar.showMessage("Parent-child relation updated")
+        if moved_count > 0 and blocked_count > 0:
+            self.statusBar.showMessage(
+                f"Parent-child updated: {moved_count} action(s) moved, {blocked_count} blocked by cycle"
+            )
+        elif moved_count > 0:
+            self.statusBar.showMessage(f"Parent-child updated: {moved_count} action(s)")
+        else:
+            self.statusBar.showMessage("No actions moved")
 
     def _rebuild_groups_from_tree(self):
         """Rebuild script_groups based on current tree visual order."""

@@ -33,6 +33,20 @@ class ScriptTreeWidget(QTreeWidget):
         source_payload = source_item.data(0, Qt.ItemDataRole.UserRole) if source_item else None
         target_payload = target_item.data(0, Qt.ItemDataRole.UserRole) if target_item else None
         indicator = self.dropIndicatorPosition()
+        selected_action_payloads = []
+        for it in self.selectedItems():
+            try:
+                p = it.data(0, Qt.ItemDataRole.UserRole)
+            except Exception:
+                p = None
+            if (
+                isinstance(p, tuple)
+                and len(p) >= 3
+                and p[0] == "action"
+            ):
+                selected_action_payloads.append((p[0], int(p[1]), int(p[2])))
+        # Keep stable order and remove duplicates.
+        selected_action_payloads = sorted(set(selected_action_payloads), key=lambda x: (x[1], x[2]))
 
         # Prevent branch-over-branch "OnItem" drops because Qt may interpret it as nesting,
         # which can hide/remove one top-level branch after rebuild.
@@ -81,17 +95,29 @@ class ScriptTreeWidget(QTreeWidget):
             and isinstance(source_payload, tuple) and isinstance(target_payload, tuple)
             and len(source_payload) >= 3 and len(target_payload) >= 3
             and source_payload[0] == "action" and target_payload[0] == "action"
-            and source_payload != target_payload
             and indicator == QAbstractItemView.DropIndicatorPosition.OnItem
         ):
+            source_candidates = list(selected_action_payloads)
+            if not source_candidates and source_payload != target_payload:
+                source_candidates = [(source_payload[0], int(source_payload[1]), int(source_payload[2]))]
+            source_candidates = [p for p in source_candidates if p != target_payload]
+            if not source_candidates:
+                event.ignore()
+                return
             reply = QMessageBox.question(
                 self,
                 "Set Parent Action",
-                "Make dragged action a child of target action?",
+                (
+                    f"Make {len(source_candidates)} dragged action(s) "
+                    "child of target action?"
+                ),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
             )
             if reply == QMessageBox.StandardButton.Yes:
-                self.replace_action_requested.emit(source_payload, target_payload)
+                if len(source_candidates) == 1:
+                    self.replace_action_requested.emit(source_candidates[0], target_payload)
+                else:
+                    self.replace_action_requested.emit(source_candidates, target_payload)
                 event.ignore()
                 return
             event.ignore()
