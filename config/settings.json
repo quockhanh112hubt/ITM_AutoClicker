@@ -9,5 +9,6 @@
   "use_real_mouse": false,
   "always_on_top": false,
   "hotkey_home": "home",
-  "hotkey_record": "f10"
+  "hotkey_record": "f10",
+  "ocr_language": "vie"
 }

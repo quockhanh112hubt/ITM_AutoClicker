@@ -41,7 +41,8 @@ class AutoClicker:
         priority_cooldown_ms: int = DEFAULT_PRIORITY_COOLDOWN_MS,
         drag_mode: str = DEFAULT_DRAG_MODE,
         use_real_mouse: bool = False,
-        image_confidence: float = 0.8
+        image_confidence: float = 0.8,
+        ocr_language: str = "eng+vie"
     ):
         """
         Initialize auto clicker
@@ -79,6 +80,7 @@ class AutoClicker:
         self.priority_cooldown_ms = priority_cooldown_ms
         self.drag_mode = str(drag_mode or DEFAULT_DRAG_MODE).lower()
         self.use_real_mouse = bool(use_real_mouse)
+        self.ocr_language = str(ocr_language or "eng+vie").strip() or "eng+vie"
         self.is_running = False
         self.is_paused = False
         self.current_script: Optional[ClickScript] = None
@@ -150,6 +152,13 @@ class AutoClicker:
     def set_use_real_mouse(self, enabled: bool) -> None:
         """Set whether all mouse actions should use real mouse input."""
         self.use_real_mouse = bool(enabled)
+
+    def set_ocr_language(self, language_code: str) -> None:
+        """Set OCR language code for Tesseract (example: eng, vie, eng+vie)."""
+        value = str(language_code or "").strip()
+        if not value:
+            value = "eng+vie"
+        self.ocr_language = value
     
     def set_on_status_changed(self, callback: Callable) -> None:
         """Set callback for status changes"""
@@ -949,7 +958,8 @@ class AutoClicker:
             if x2 <= x1 or y2 <= y1:
                 return False, "OCR failed: invalid region"
             img = ImageGrab.grab(bbox=(int(x1), int(y1), int(x2), int(y2))).convert("RGB")
-            raw_text = pytesseract.image_to_string(img, config="--psm 6")
+            lang = str(self.ocr_language or "eng+vie").strip() or "eng+vie"
+            raw_text = pytesseract.image_to_string(img, lang=lang, config="--psm 6")
             text = " ".join(str(raw_text or "").split())
             return True, text
         except Exception as e:

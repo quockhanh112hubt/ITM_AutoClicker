@@ -54,7 +54,8 @@ class MainWindow(QMainWindow):
             self.config.get("priority_cooldown_ms", 800),
             self.config.get("drag_mode", "hybrid"),
             self.config.get("use_real_mouse", False),
-            self.config.get("image_confidence", 0.8)
+            self.config.get("image_confidence", 0.8),
+            self.config.get("ocr_language", "eng+vie")
         )
         self.auto_clicker.set_on_status_changed(self._on_status_changed_from_worker)
         self.auto_clicker.set_on_action_executed(self._on_action_executed_from_worker)
@@ -503,6 +504,29 @@ class MainWindow(QMainWindow):
         priority_layout.addWidget(self.priority_cooldown_spinbox)
         priority_layout.addStretch()
         layout.addLayout(priority_layout)
+
+        # OCR language
+        ocr_layout = QHBoxLayout()
+        ocr_label = QLabel("OCR Language:")
+        self.ocr_language_combo = QComboBox()
+        self.ocr_language_combo.addItem("English + Vietnamese (eng+vie)", "eng+vie")
+        self.ocr_language_combo.addItem("Vietnamese (vie)", "vie")
+        self.ocr_language_combo.addItem("English (eng)", "eng")
+        current_ocr_lang = str(self.config.get("ocr_language", "eng+vie") or "eng+vie").strip().lower()
+        ocr_index = self.ocr_language_combo.findData(current_ocr_lang)
+        if ocr_index < 0:
+            self.ocr_language_combo.addItem(f"Custom ({current_ocr_lang})", current_ocr_lang)
+            ocr_index = self.ocr_language_combo.findData(current_ocr_lang)
+        self.ocr_language_combo.setCurrentIndex(max(0, ocr_index))
+        self.ocr_language_combo.currentIndexChanged.connect(self.on_ocr_language_changed)
+        self.ocr_language_combo.setToolTip(
+            "Tesseract language code used by Image Recognition.\n"
+            "For Vietnamese, make sure vie.traineddata exists in tessdata."
+        )
+        ocr_layout.addWidget(ocr_label)
+        ocr_layout.addWidget(self.ocr_language_combo)
+        ocr_layout.addStretch()
+        layout.addLayout(ocr_layout)
         
         # Drag mode setting
         drag_layout = QHBoxLayout()
@@ -2481,6 +2505,17 @@ class MainWindow(QMainWindow):
         """Handle priority cooldown changed"""
         self.auto_clicker.set_priority_cooldown(value)
         self.config.set("priority_cooldown_ms", value)
+
+    def on_ocr_language_changed(self, index: int):
+        """Handle OCR language selection."""
+        if not hasattr(self, "ocr_language_combo") or self.ocr_language_combo is None:
+            return
+        lang_code = str(self.ocr_language_combo.currentData() or "eng+vie").strip()
+        if not lang_code:
+            lang_code = "eng+vie"
+        self.auto_clicker.set_ocr_language(lang_code)
+        self.config.set("ocr_language", lang_code)
+        self.statusBar.showMessage(f"OCR language set to: {lang_code}")
 
     def on_drag_mode_changed(self, index: int):
         """Handle drag mode changed."""
