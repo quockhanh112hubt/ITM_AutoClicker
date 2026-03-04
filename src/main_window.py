@@ -1538,7 +1538,7 @@ class MainWindow(QMainWindow):
                 group_index = int(payload[1])
                 if group_index < 0 or group_index >= len(self.script_groups):
                     return
-                checked = item.checkState(0) == Qt.CheckState.Checked
+                checked = item.checkState(0) != Qt.CheckState.Unchecked
                 group = self.script_groups[group_index]
                 group["enabled"] = checked
                 self._updating_table = True
@@ -1562,7 +1562,7 @@ class MainWindow(QMainWindow):
                 actions = self.script_groups[group_index].get("actions", [])
                 if action_index < 0 or action_index >= len(actions):
                     return
-                checked = item.checkState(0) == Qt.CheckState.Checked
+                checked = item.checkState(0) != Qt.CheckState.Unchecked
                 actions[action_index]["enabled"] = checked
                 
                 # Reflect mixed states on branch checkbox.
@@ -1808,7 +1808,7 @@ class MainWindow(QMainWindow):
                         "parent_id": parent_action_id,
                         "max_executions": src_entry.get("max_executions"),
                         "name": (action_item.text(0) or src_entry.get("name", f"Action {new_ai + 1}")).strip() or f"Action {new_ai + 1}",
-                        "enabled": action_item.checkState(0) == Qt.CheckState.Checked,
+                        "enabled": action_item.checkState(0) != Qt.CheckState.Unchecked,
                         "action": action_obj,
                     }
                     actions.append(new_entry)
@@ -2418,60 +2418,66 @@ class MainWindow(QMainWindow):
         })
     
     def _build_runtime_script_and_key_map(self):
-        """Build executable flat script from checked branch/action entries."""
+        """Build executable flat script from current tree hierarchy/check states."""
         script = ClickScript()
         key_map: list[tuple[int, int]] = []
-        
-        for group_index, group in enumerate(self.script_groups):
-            if not group.get("enabled", True):
-                continue
-            actions = group.get("actions", [])
-            for entry in actions:
+
+        # Ensure each action has a stable id for later operations.
+        for group in self.script_groups:
+            for entry in group.get("actions", []):
                 if not entry.get("id"):
                     entry["id"] = uuid.uuid4().hex
 
-            children_map: dict[str | None, list[int]] = {}
-            for action_index, entry in enumerate(actions):
-                if not entry.get("enabled", True):
-                    continue
-                parent_id = entry.get("parent_id")
-                if not parent_id or not any(e.get("id") == parent_id and e.get("enabled", True) for e in actions):
-                    parent_id = None
-                children_map.setdefault(parent_id, []).append(action_index)
+        def add_tree_action_node(item: QTreeWidgetItem, parent_runtime_index: int | None, ancestors_enabled: bool):
+            payload = item.data(0, Qt.ItemDataRole.UserRole)
+            if not (isinstance(payload, tuple) and len(payload) >= 3 and payload[0] == "action"):
+                return
 
-            visited = set()
+            group_index = int(payload[1])
+            action_index = int(payload[2])
+            if group_index < 0 or group_index >= len(self.script_groups):
+                return
+            actions = self.script_groups[group_index].get("actions", [])
+            if action_index < 0 or action_index >= len(actions):
+                return
 
-            def add_runtime_node(action_index: int, parent_runtime_index: int | None):
-                if action_index in visited:
-                    return
-                visited.add(action_index)
-                entry = actions[action_index]
-                if not entry.get("enabled", True):
-                    return
-                action = entry.get("action")
-                if not isinstance(action, ClickAction):
-                    return
+            entry = actions[action_index]
+            enabled_here = item.checkState(0) != Qt.CheckState.Unchecked
+            if not ancestors_enabled or not enabled_here:
+                return
 
-                runtime_action = ClickAction.from_dict(action.to_dict())
-                if parent_runtime_index is not None:
-                    runtime_action.data["__parent_runtime_index"] = int(parent_runtime_index)
-                max_exec = entry.get("max_executions")
-                if max_exec is not None:
-                    try:
-                        runtime_action.data["__max_executions"] = max(1, int(max_exec))
-                    except Exception:
-                        pass
-                runtime_index = len(script.get_actions())
-                script.add_action(runtime_action)
-                key_map.append((group_index, action_index))
+            action = entry.get("action")
+            if not isinstance(action, ClickAction):
+                return
 
-                for child_index in children_map.get(entry.get("id"), []):
-                    add_runtime_node(child_index, runtime_index)
+            runtime_action = ClickAction.from_dict(action.to_dict())
+            if parent_runtime_index is not None:
+                runtime_action.data["__parent_runtime_index"] = int(parent_runtime_index)
+            max_exec = entry.get("max_executions")
+            if max_exec is not None:
+                try:
+                    runtime_action.data["__max_executions"] = max(1, int(max_exec))
+                except Exception:
+                    pass
 
-            for root_index in children_map.get(None, []):
-                add_runtime_node(root_index, None)
-            for fallback_index in range(len(actions)):
-                add_runtime_node(fallback_index, None)
+            runtime_index = len(script.get_actions())
+            script.add_action(runtime_action)
+            key_map.append((group_index, action_index))
+
+            for i in range(item.childCount()):
+                add_tree_action_node(item.child(i), runtime_index, True)
+
+        for gi in range(self.script_tree.topLevelItemCount()):
+            group_item = self.script_tree.topLevelItem(gi)
+            if group_item is None:
+                continue
+            if group_item.checkState(0) == Qt.CheckState.Unchecked:
+                continue
+
+            # Traverse visible order in tree for deterministic runtime sequence.
+            for i in range(group_item.childCount()):
+                add_tree_action_node(group_item.child(i), None, True)
+
         return script, key_map
     
     def _serialize_grouped_script(self) -> dict:
