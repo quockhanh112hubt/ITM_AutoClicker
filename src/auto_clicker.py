@@ -98,6 +98,7 @@ class AutoClicker:
         self._if_trigger_timestamps: list[float] = []
         self._if_trigger_limit = 5
         self._if_trigger_window_sec = 1.0
+        self._run_started_at = 0.0
         self._tesseract_cmd = self._resolve_tesseract_cmd()
     
     def set_delay(self, delay_ms: int) -> None:
@@ -216,6 +217,7 @@ class AutoClicker:
         self._pending_runtime_indices = []
         self._if_last_trigger_at = {}
         self._if_trigger_timestamps = []
+        self._run_started_at = time.time()
         self._notify_status("Starting auto click...")
         
         self._execution_thread = threading.Thread(target=self._execute_loop, daemon=EXECUTION_THREAD_DAEMON)
@@ -480,6 +482,10 @@ class AutoClicker:
             return False
         src_action = actions[si]
         if src_action.type != ClickType.IMAGE_RECOGNITION:
+            return False
+        last_at = float(src_action.data.get("last_recognized_at", 0.0) or 0.0)
+        if last_at <= float(self._run_started_at):
+            # Source OCR has not produced a fresh value in this Start run yet.
             return False
 
         actual = str(src_action.data.get("last_recognized_value", "") or "")
@@ -1109,6 +1115,7 @@ class AutoClicker:
         recognized = str(text_or_reason or "")
         action.data["last_recognized_value"] = recognized
         action.data["last_recognition_status"] = "ok"
+        action.data["last_recognized_at"] = time.time()
         x1, y1, x2, y2 = region
         msg = (
             f"OCR: '{recognized}'" if recognized else "OCR: (empty)"

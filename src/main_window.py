@@ -1491,6 +1491,13 @@ class MainWindow(QMainWindow):
         menu = QMenu(self)
         add_branch_action = menu.addAction("Add Branch")
         add_if_action = menu.addAction("Add IF")
+        quick_if_menu = menu.addMenu("Quick IF")
+        qif_num_gt = quick_if_menu.addAction("OCR Number > X  -> Stop")
+        qif_num_gte = quick_if_menu.addAction("OCR Number >= X -> Stop")
+        qif_num_lt = quick_if_menu.addAction("OCR Number < X  -> Stop")
+        qif_num_lte = quick_if_menu.addAction("OCR Number <= X -> Stop")
+        qif_num_eq = quick_if_menu.addAction("OCR Number == X -> Stop")
+        qif_text_contains = quick_if_menu.addAction("OCR Text contains X -> Stop")
         rename_action = menu.addAction("Rename")
         delete_action = menu.addAction("Delete")
         menu.addSeparator()
@@ -1506,6 +1513,24 @@ class MainWindow(QMainWindow):
         if chosen == add_if_action:
             self.on_add_if(item)
             return
+        if chosen == qif_num_gt:
+            self.on_add_quick_if(item, "number", "gt")
+            return
+        if chosen == qif_num_gte:
+            self.on_add_quick_if(item, "number", "gte")
+            return
+        if chosen == qif_num_lt:
+            self.on_add_quick_if(item, "number", "lt")
+            return
+        if chosen == qif_num_lte:
+            self.on_add_quick_if(item, "number", "lte")
+            return
+        if chosen == qif_num_eq:
+            self.on_add_quick_if(item, "number", "eq")
+            return
+        if chosen == qif_text_contains:
+            self.on_add_quick_if(item, "text", "contains")
+            return
         if chosen == rename_action:
             self.on_rename_selected()
             return
@@ -1514,6 +1539,154 @@ class MainWindow(QMainWindow):
             return
         if chosen == clear_all_action:
             self.on_clear_all()
+
+    def _collect_image_recognition_sources(self) -> list[dict]:
+        """Collect IMAGE_RECOGNITION actions for Quick IF source."""
+        options = []
+        for gi, group in enumerate(self.script_groups):
+            gname = str(group.get("name", f"Branch {gi+1}"))
+            for ai, entry in enumerate(group.get("actions", [])):
+                if not entry.get("id"):
+                    entry["id"] = uuid.uuid4().hex
+                action = entry.get("action")
+                if not isinstance(action, ClickAction):
+                    continue
+                if action.type != ClickType.IMAGE_RECOGNITION:
+                    continue
+                options.append({
+                    "id": str(entry.get("id") or ""),
+                    "name": str(entry.get("name", f"Action {ai+1}")),
+                    "group_index": gi,
+                    "group_name": gname,
+                    "action_index": ai,
+                })
+        return [x for x in options if x.get("id")]
+
+    def _resolve_quick_if_source(self, context_item: QTreeWidgetItem | None) -> dict | None:
+        """Resolve source IMAGE_RECOGNITION action from current context."""
+        if context_item is not None:
+            payload = context_item.data(0, Qt.ItemDataRole.UserRole)
+            if isinstance(payload, tuple) and len(payload) >= 3 and payload[0] == "action":
+                gi = int(payload[1])
+                ai = int(payload[2])
+                if 0 <= gi < len(self.script_groups):
+                    actions = self.script_groups[gi].get("actions", [])
+                    if 0 <= ai < len(actions):
+                        entry = actions[ai]
+                        action = entry.get("action")
+                        if isinstance(action, ClickAction) and action.type == ClickType.IMAGE_RECOGNITION:
+                            if not entry.get("id"):
+                                entry["id"] = uuid.uuid4().hex
+                            return {
+                                "id": str(entry.get("id")),
+                                "name": str(entry.get("name", f"Action {ai+1}")),
+                                "group_index": gi,
+                                "group_name": str(self.script_groups[gi].get("name", f"Branch {gi+1}")),
+                                "action_index": ai,
+                            }
+
+        options = self._collect_image_recognition_sources()
+        if not options:
+            return None
+        if len(options) == 1:
+            return options[0]
+        labels = [f"{o['name']} [{o['group_name']}]" for o in options]
+        selected, ok = QInputDialog.getItem(
+            self,
+            "Quick IF Source",
+            "Select IMAGE RECOGNITION source action:",
+            labels,
+            0,
+            False,
+        )
+        if not ok:
+            return None
+        try:
+            idx = labels.index(str(selected))
+            return options[idx]
+        except Exception:
+            return None
+
+    def on_add_quick_if(self, context_item: QTreeWidgetItem | None, value_type: str, operator: str):
+        """Add Quick IF preset (OCR compare -> STOP)."""
+        if self.auto_clicker.is_running:
+            self.statusBar.showMessage("Cannot add IF while running")
+            return
+
+        source = self._resolve_quick_if_source(context_item)
+        if not source:
+            QMessageBox.information(
+                self,
+                "Quick IF",
+                "No IMAGE RECOGNITION source found. Please add one first."
+            )
+            return
+
+        compare_value = ""
+        if str(value_type) == "number":
+            number, ok = QInputDialog.getDouble(
+                self,
+                "Quick IF",
+                "Enter X value:",
+                0.0,
+                -999999999.0,
+                999999999.0,
+                3,
+            )
+            if not ok:
+                return
+            compare_value = str(number)
+        else:
+            text, ok = QInputDialog.getText(self, "Quick IF", "Enter text X:")
+            if not ok:
+                return
+            compare_value = str(text or "").strip()
+            if not compare_value:
+                QMessageBox.warning(self, "Quick IF", "Compare text cannot be empty.")
+                return
+
+        action = ClickAction(
+            ClickType.IF,
+            if_mode="if",
+            if_condition_type="ocr_compare",
+            if_ocr_value_type=str(value_type),
+            if_ocr_operator=str(operator),
+            if_ocr_compare_value=str(compare_value),
+            source_action_id=str(source.get("id", "")),
+            source_action_name=str(source.get("name", "")),
+            then_action="stop",
+            target_branch_index=None,
+            target_action_id=None,
+            target_action_name=None,
+            priority_level=0,
+            if_cooldown_ms=500,
+            delay_ms=0,
+        )
+        new_entry = {
+            "id": uuid.uuid4().hex,
+            "parent_id": None,
+            "max_executions": None,
+            "name": f"QIF {sum(1 for g in self.script_groups for e in g.get('actions', []) if isinstance(e.get('action'), ClickAction) and e.get('action').type == ClickType.IF) + 1}",
+            "enabled": True,
+            "action": action,
+        }
+        inserted = False
+        try:
+            gi = int(source.get("group_index"))
+            ai = int(source.get("action_index"))
+            if 0 <= gi < len(self.script_groups):
+                actions = self.script_groups[gi].setdefault("actions", [])
+                if 0 <= ai < len(actions):
+                    src_parent_id = actions[ai].get("parent_id")
+                    new_entry["parent_id"] = src_parent_id
+                    actions.insert(ai + 1, new_entry)
+                    inserted = True
+        except Exception:
+            inserted = False
+        if not inserted:
+            self._insert_action_entry_at_context(new_entry, context_item)
+        self.update_table()
+        self.statusBar.showMessage("Added Quick IF (OCR compare -> STOP) below source Image Recognition")
 
     def on_add_if(self, context_item: QTreeWidgetItem | None):
         """Add IF/IF NOT row at context position in branch/action list."""
@@ -2530,6 +2703,10 @@ class MainWindow(QMainWindow):
     def on_start_pause_resume(self):
         """Start script or toggle pause/resume when already running."""
         if not self.auto_clicker.is_running:
+            # Match HOME-hotkey behavior: quick-start should auto-finish any active recording
+            # (including Image Recognition overlay) before starting execution.
+            if self._is_recording_active():
+                self._finish_recording_for_quick_start()
             self.on_start()
             return
         if self.auto_clicker.is_paused:
@@ -2811,6 +2988,11 @@ class MainWindow(QMainWindow):
                 return
 
             runtime_action = ClickAction.from_dict(action.to_dict())
+            if runtime_action.type == ClickType.IMAGE_RECOGNITION:
+                # Avoid stale OCR value from previous Start run.
+                runtime_action.data["last_recognized_value"] = ""
+                runtime_action.data["last_recognition_status"] = ""
+                runtime_action.data["last_recognized_at"] = 0.0
             if parent_runtime_index is not None:
                 runtime_action.data["__parent_runtime_index"] = int(parent_runtime_index)
             runtime_action.data["__branch_index"] = int(group_index)
