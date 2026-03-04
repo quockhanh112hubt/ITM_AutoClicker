@@ -9,7 +9,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTabWidget,
     QLabel, QSpinBox, QFileDialog, QMessageBox, QDialog,
-    QDialogButtonBox, QRadioButton, QButtonGroup, QStatusBar,
+    QDialogButtonBox, QRadioButton, QButtonGroup, QStatusBar, QFormLayout,
     QComboBox, QTreeWidget, QTreeWidgetItem, QInputDialog, QToolButton, QCheckBox, QMenu, QApplication,
     QAbstractItemView
 )
@@ -34,6 +34,7 @@ import win32con
 class MainWindow(QMainWindow):
     """Main application window"""
     action_executed_signal = pyqtSignal(int)
+    action_detail_changed_signal = pyqtSignal(int, str)
     status_changed_signal = pyqtSignal(str)
     
     def __init__(self):
@@ -57,6 +58,7 @@ class MainWindow(QMainWindow):
         )
         self.auto_clicker.set_on_status_changed(self._on_status_changed_from_worker)
         self.auto_clicker.set_on_action_executed(self._on_action_executed_from_worker)
+        self.auto_clicker.set_on_action_detail_changed(self._on_action_detail_changed_from_worker)
         self.hotkey_bindings = self._load_hotkey_bindings()
         
         # Initialize keyboard listener for Start/Pause/Resume and Stop
@@ -103,6 +105,7 @@ class MainWindow(QMainWindow):
         self._screen_record_elapsed_timer.timeout.connect(self._on_screen_record_elapsed_tick)
         self._screen_record_restore_states: dict = {}
         self.action_executed_signal.connect(self._on_action_executed_main_thread)
+        self.action_detail_changed_signal.connect(self._on_action_detail_changed_main_thread)
         self.status_changed_signal.connect(self.on_status_changed)
         self._ensure_default_group()
         self._always_on_top_enabled = bool(self.config.get("always_on_top", False))
@@ -294,11 +297,30 @@ class MainWindow(QMainWindow):
         self.btn_tool_record_screen.clicked.connect(self.on_record_screen_action_clicked)
         action_toolbar.addWidget(self.btn_tool_record_screen)
 
+        self.btn_tool_image_recognition = QToolButton()
+        self.btn_tool_image_recognition.setText("Image Recognition")
+        self.btn_tool_image_recognition.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+        self.btn_tool_image_recognition.setCheckable(True)
+        self.btn_tool_image_recognition.setMinimumWidth(128)
+        self.btn_tool_image_recognition.setMinimumHeight(56)
+        self.btn_tool_image_recognition.setToolTip(
+            "Record IMAGE RECOGNITION action.\n"
+            "Program detects the selected image area and reads text value from it."
+        )
+        if self._icons.get("image_recognition") and not self._icons.get("image_recognition").isNull():
+            self.btn_tool_image_recognition.setIcon(self._icons.get("image_recognition"))
+            self.btn_tool_image_recognition.setIconSize(QPixmap(40, 40).size())
+        self.btn_tool_image_recognition.clicked.connect(
+            lambda: self.on_toolbar_add_action(ClickType.IMAGE_RECOGNITION, self.btn_tool_image_recognition)
+        )
+        action_toolbar.addWidget(self.btn_tool_image_recognition)
+
         self._action_tool_buttons = [
             self.btn_tool_position,
             self.btn_tool_image,
             self.btn_tool_image_direct,
             self.btn_tool_record_screen,
+            self.btn_tool_image_recognition,
         ]
         self._update_record_hotkey_ui()
         self._apply_action_toolbar_button_style()
@@ -689,11 +711,17 @@ class MainWindow(QMainWindow):
                     )
                     action_item.setText(0, str(entry.get("name", f"Action {action_index + 1}")))
                     self._apply_action_icon(action_item, action)
-                    action_item.setText(1, action.type.value.upper())
+                    if action.type == ClickType.IF:
+                        mode = str(action.data.get("if_mode", "if")).strip().lower()
+                        action_item.setText(1, "IF NOT" if mode == "if_not" else "IF")
+                    elif action.type == ClickType.IMAGE_RECOGNITION:
+                        action_item.setText(1, "IMAGE RECOG")
+                    else:
+                        action_item.setText(1, action.type.value.upper())
 
                     preview_label = QLabel("-")
                     preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                    if action.type in (ClickType.IMAGE, ClickType.IMAGE_DIRECT):
+                    if action.type in (ClickType.IMAGE, ClickType.IMAGE_DIRECT, ClickType.IMAGE_RECOGNITION):
                         image_path = action.data.get("image_path", "")
                         if image_path and os.path.exists(image_path):
                             pixmap = QPixmap(image_path)
@@ -706,9 +734,11 @@ class MainWindow(QMainWindow):
                                     )
                                 )
                                 preview_label.setText("")
+                    elif action.type == ClickType.IF:
+                        preview_label.setText(str(action.data.get("source_action_name", "-")))
                     self.script_tree.setItemWidget(action_item, 2, preview_label)
 
-                    if action.type in (ClickType.IMAGE, ClickType.IMAGE_DIRECT):
+                    if action.type in (ClickType.IMAGE, ClickType.IMAGE_DIRECT, ClickType.IF):
                         priority_combo = self._create_priority_combo(group_index, action_index, action)
                         self.script_tree.setItemWidget(action_item, 3, priority_combo)
                     else:
@@ -1025,6 +1055,7 @@ class MainWindow(QMainWindow):
             self.btn_tool_position,
             self.btn_tool_image,
             self.btn_tool_image_direct,
+            self.btn_tool_image_recognition,
             self.btn_start,
             self.btn_stop,
             self.btn_speed_up,
@@ -1312,13 +1343,19 @@ class MainWindow(QMainWindow):
             target_window=self.selected_target_window,
             require_click_position=require_click_position
         )
-        mode = "Image Based" if require_click_position else "Image Direct"
+        if image_click_type == ClickType.IMAGE:
+            mode = "Image Based"
+        elif image_click_type == ClickType.IMAGE_DIRECT:
+            mode = "Image Direct"
+        else:
+            mode = "Image Recognition"
         self._set_status_recording_style(True)
-        self.statusBar.showMessage(f"🔴 {mode} recording started. Target: {self.selected_target_window.title}")
+        self.statusBar.showMessage(f"[REC] {mode} recording started. Target: {self.selected_target_window.title}")
     
     def on_image_recorded(self, recorded: dict, total_count: int):
         """Handle one image+click position recorded and persist it immediately"""
         is_direct = self.pending_image_action_type == ClickType.IMAGE_DIRECT
+        is_recognition = self.pending_image_action_type == ClickType.IMAGE_RECOGNITION
         default_delay_ms = int(self.config.get("click_delay_ms", 100))
         action = ClickAction(
             self.pending_image_action_type,
@@ -1340,16 +1377,21 @@ class MainWindow(QMainWindow):
             drag_ms=recorded.get("drag_ms"),
             key_name=recorded.get("key_name"),
             hotkey_keys=recorded.get("hotkey_keys"),
+            region_x1=recorded.get("region_x1"),
+            region_y1=recorded.get("region_y1"),
+            region_x2=recorded.get("region_x2"),
+            region_y2=recorded.get("region_y2"),
             target_hwnd=recorded.get("target_hwnd"),
             target_title=recorded.get("target_title", ""),
             priority_level=1 if is_direct else 0,
+            last_recognized_value="" if is_recognition else None,
+            last_recognition_status="" if is_recognition else None,
             delay_ms=default_delay_ms
         )
         self._add_action_to_selected_branch(action, self.pending_branch_index)
         self.update_table()
-        self.statusBar.showMessage(
-            f"Recorded {total_count} image action(s). Continue selecting, press ESC to finish."
-        )
+        mode_label = "image recognition" if is_recognition else "image"
+        self.statusBar.showMessage(f"Recorded {total_count} {mode_label} action(s). Continue selecting, press ESC to finish.")
     
     def on_image_recording_complete(self, recorded_images):
         """Handle image recording complete"""
@@ -1424,6 +1466,7 @@ class MainWindow(QMainWindow):
 
         menu = QMenu(self)
         add_branch_action = menu.addAction("Add Branch")
+        add_if_action = menu.addAction("Add IF")
         rename_action = menu.addAction("Rename")
         delete_action = menu.addAction("Delete")
         menu.addSeparator()
@@ -1436,6 +1479,9 @@ class MainWindow(QMainWindow):
         if chosen == add_branch_action:
             self.on_add_branch()
             return
+        if chosen == add_if_action:
+            self.on_add_if(item)
+            return
         if chosen == rename_action:
             self.on_rename_selected()
             return
@@ -1444,6 +1490,167 @@ class MainWindow(QMainWindow):
             return
         if chosen == clear_all_action:
             self.on_clear_all()
+
+    def on_add_if(self, context_item: QTreeWidgetItem | None):
+        """Add IF/IF NOT row at context position in branch/action list."""
+        if self.auto_clicker.is_running:
+            self.statusBar.showMessage("Cannot add IF while running")
+            return
+
+        source_options = self._collect_image_action_sources()
+        if not source_options:
+            QMessageBox.information(
+                self,
+                "Add IF",
+                "No IMAGE/IMAGE DIRECT action found.\nPlease add at least one image-based action first."
+            )
+            return
+
+        if_data = self._show_if_dialog(source_options)
+        if not if_data:
+            return
+
+        action = ClickAction(
+            ClickType.IF,
+            if_mode=str(if_data.get("if_mode", "if")),
+            source_action_id=str(if_data.get("source_action_id", "")),
+            source_action_name=str(if_data.get("source_action_name", "")),
+            then_action=str(if_data.get("then_action", "run_branch")),
+            target_branch_index=if_data.get("target_branch_index"),
+            priority_level=int(if_data.get("priority_level", 0) or 0),
+            if_cooldown_ms=int(if_data.get("if_cooldown_ms", 500) or 0),
+            delay_ms=0,
+        )
+        new_entry = {
+            "id": uuid.uuid4().hex,
+            "parent_id": None,
+            "max_executions": None,
+            "name": f"IF {sum(1 for g in self.script_groups for e in g.get('actions', []) if isinstance(e.get('action'), ClickAction) and e.get('action').type == ClickType.IF) + 1}",
+            "enabled": True,
+            "action": action,
+        }
+        self._insert_action_entry_at_context(new_entry, context_item)
+        self.update_table()
+        self.statusBar.showMessage("Added IF row")
+
+    def _insert_action_entry_at_context(self, new_entry: dict, context_item: QTreeWidgetItem | None):
+        """Insert action entry near right-clicked item (before action row, else append branch)."""
+        branch_index = self._get_selected_branch_index(require_selection=False)
+        insert_index = None
+        parent_id_for_new = None
+        if context_item is not None:
+            payload = context_item.data(0, Qt.ItemDataRole.UserRole)
+            if payload and payload[0] == "group":
+                branch_index = int(payload[1])
+            elif payload and payload[0] == "action":
+                branch_index = int(payload[1])
+                insert_index = int(payload[2])
+                if 0 <= branch_index < len(self.script_groups):
+                    actions = self.script_groups[branch_index].get("actions", [])
+                    if 0 <= insert_index < len(actions):
+                        parent_id_for_new = actions[insert_index].get("parent_id")
+
+        if branch_index is None or branch_index < 0 or branch_index >= len(self.script_groups):
+            self._ensure_default_group()
+            branch_index = 0
+        actions = self.script_groups[branch_index].setdefault("actions", [])
+        new_entry["parent_id"] = parent_id_for_new
+        if insert_index is None or insert_index < 0 or insert_index > len(actions):
+            actions.append(new_entry)
+        else:
+            actions.insert(insert_index, new_entry)
+
+    def _collect_image_action_sources(self) -> list[dict]:
+        """Collect image-driven actions for IF source picker."""
+        options = []
+        for gi, group in enumerate(self.script_groups):
+            gname = str(group.get("name", f"Branch {gi+1}"))
+            for ai, entry in enumerate(group.get("actions", [])):
+                if not entry.get("id"):
+                    entry["id"] = uuid.uuid4().hex
+                action = entry.get("action")
+                if not isinstance(action, ClickAction):
+                    continue
+                if action.type not in (ClickType.IMAGE, ClickType.IMAGE_DIRECT, ClickType.IMAGE_RECOGNITION):
+                    continue
+                action_id = str(entry.get("id") or "")
+                if not action_id:
+                    continue
+                options.append({
+                    "id": action_id,
+                    "name": str(entry.get("name", f"Action {ai+1}")),
+                    "group_index": gi,
+                    "group_name": gname,
+                    "action_index": ai,
+                })
+        return options
+
+    def _show_if_dialog(self, source_options: list[dict]) -> dict | None:
+        """Open dialog to configure IF/IF NOT rule."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Add IF")
+        self._apply_always_on_top_to_dialog(dlg)
+        layout = QVBoxLayout(dlg)
+        form = QFormLayout()
+
+        mode_combo = QComboBox()
+        mode_combo.addItem("IF")
+        mode_combo.addItem("IF NOT")
+        form.addRow("Mode:", mode_combo)
+
+        source_combo = QComboBox()
+        for opt in source_options:
+            source_combo.addItem(f"{opt['name']} [{opt['group_name']}]", opt)
+        form.addRow("Source Action:", source_combo)
+
+        then_combo = QComboBox()
+        then_combo.addItem("Run Branch", "run_branch")
+        then_combo.addItem("Stop", "stop")
+        form.addRow("Then:", then_combo)
+
+        target_combo = QComboBox()
+        for gi, group in enumerate(self.script_groups):
+            target_combo.addItem(str(group.get("name", f"Branch {gi+1}")), gi)
+        form.addRow("Target Branch:", target_combo)
+
+        priority_spin = QSpinBox()
+        priority_spin.setRange(0, 20)
+        priority_spin.setValue(0)
+        form.addRow("Priority:", priority_spin)
+
+        cooldown_spin = QSpinBox()
+        cooldown_spin.setRange(0, 60000)
+        cooldown_spin.setValue(500)
+        form.addRow("Cooldown (ms):", cooldown_spin)
+
+        def _sync_then_state():
+            target_combo.setEnabled(str(then_combo.currentData()) == "run_branch")
+
+        then_combo.currentIndexChanged.connect(_sync_then_state)
+        _sync_then_state()
+
+        layout.addLayout(form)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        layout.addWidget(buttons)
+
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return None
+        source_opt = source_combo.currentData()
+        if not isinstance(source_opt, dict):
+            return None
+        then_action = str(then_combo.currentData() or "run_branch")
+        target_branch_index = int(target_combo.currentData()) if then_action == "run_branch" else None
+        return {
+            "if_mode": "if_not" if mode_combo.currentText().strip().upper() == "IF NOT" else "if",
+            "source_action_id": str(source_opt.get("id", "")),
+            "source_action_name": str(source_opt.get("name", "")),
+            "then_action": then_action,
+            "target_branch_index": target_branch_index,
+            "priority_level": int(priority_spin.value()),
+            "if_cooldown_ms": int(cooldown_spin.value()),
+        }
     
     def on_rename_selected(self):
         """Rename currently selected branch/action."""
@@ -1488,7 +1695,7 @@ class MainWindow(QMainWindow):
             return
         action = actions[action_index].get("action")
         
-        if action.type not in (ClickType.IMAGE, ClickType.IMAGE_DIRECT):
+        if action.type not in (ClickType.IMAGE, ClickType.IMAGE_DIRECT, ClickType.IF):
             return
         
         raw = (text or "").strip().upper()
@@ -1935,6 +2142,7 @@ class MainWindow(QMainWindow):
         hotkey_icon = QIcon(self._resource_path(os.path.join("resource", "Hotkey.png")))
         key_hold_icon = QIcon(self._resource_path(os.path.join("resource", "KeyHold.png")))
         record_screen_icon = QIcon(self._resource_path(os.path.join("resource", "RecordScreen.png")))
+        image_recognition_icon = QIcon(self._resource_path(os.path.join("resource", "ImageRecognition.png")))
         speed_up_icon = QIcon(self._resource_path(os.path.join("resource", "SpeedUp.png")))
         speed_down_icon = QIcon(self._resource_path(os.path.join("resource", "SpeedDown.png")))
         mouse_on_drag_pixmap = QPixmap(self._resource_path(os.path.join("resource", "MouseOnDrag.png")))
@@ -1955,6 +2163,7 @@ class MainWindow(QMainWindow):
             "adv_hotkey": hotkey_icon,
             "adv_key_hold_repeat": key_hold_icon,
             "record_screen": record_screen_icon,
+            "image_recognition": image_recognition_icon,
             "speed_up": speed_up_icon,
             "speed_down": speed_down_icon,
             "mouse_on_drag": mouse_on_drag_pixmap,
@@ -1966,6 +2175,10 @@ class MainWindow(QMainWindow):
             icon = self._icons.get("position")
         elif action.type == ClickType.IMAGE_DIRECT:
             icon = self._icons.get("image_direct")
+        elif action.type == ClickType.IMAGE_RECOGNITION:
+            icon = self._icons.get("image_recognition")
+        elif action.type == ClickType.IF:
+            icon = self._icons.get("adv_hotkey")
         else:
             icon = self._icons.get("image")
         if icon and not icon.isNull():
@@ -2453,6 +2666,7 @@ class MainWindow(QMainWindow):
             runtime_action = ClickAction.from_dict(action.to_dict())
             if parent_runtime_index is not None:
                 runtime_action.data["__parent_runtime_index"] = int(parent_runtime_index)
+            runtime_action.data["__branch_index"] = int(group_index)
             max_exec = entry.get("max_executions")
             if max_exec is not None:
                 try:
@@ -2477,6 +2691,49 @@ class MainWindow(QMainWindow):
             # Traverse visible order in tree for deterministic runtime sequence.
             for i in range(group_item.childCount()):
                 add_tree_action_node(group_item.child(i), None, True)
+
+        # Resolve IF runtime references (source image path and branch runtime indices).
+        runtime_actions = script.get_actions()
+        branch_runtime_indices: dict[int, list[int]] = {}
+        for r_idx, act in enumerate(runtime_actions):
+            bidx = act.data.get("__branch_index")
+            if bidx is None:
+                # Inject branch index from key map for later IF run-branch.
+                if 0 <= r_idx < len(key_map):
+                    bidx = int(key_map[r_idx][0])
+                    act.data["__branch_index"] = bidx
+            if bidx is not None:
+                branch_runtime_indices.setdefault(int(bidx), []).append(int(r_idx))
+
+        id_to_image_path: dict[str, str] = {}
+        for group in self.script_groups:
+            for entry in group.get("actions", []):
+                action = entry.get("action")
+                if not isinstance(action, ClickAction):
+                    continue
+                if action.type not in (ClickType.IMAGE, ClickType.IMAGE_DIRECT, ClickType.IMAGE_RECOGNITION):
+                    continue
+                aid = str(entry.get("id") or "")
+                if not aid:
+                    continue
+                path = str(action.data.get("image_path", "") or "")
+                if path:
+                    id_to_image_path[aid] = path
+
+        for r_idx, act in enumerate(runtime_actions):
+            if act.type != ClickType.IF:
+                continue
+            source_id = str(act.data.get("source_action_id", "") or "")
+            if_path = id_to_image_path.get(source_id, "")
+            act.data["__if_image_path"] = if_path
+            target_bi = act.data.get("target_branch_index")
+            try:
+                target_bi_int = int(target_bi) if target_bi is not None else None
+            except Exception:
+                target_bi_int = None
+            if target_bi_int is not None:
+                indices = [int(x) for x in branch_runtime_indices.get(target_bi_int, []) if int(x) != int(r_idx)]
+                act.data["__run_branch_runtime_indices"] = indices
 
         return script, key_map
     
@@ -2556,6 +2813,25 @@ class MainWindow(QMainWindow):
     
     def _build_action_details(self, action: ClickAction) -> str:
         """Build details text for one action."""
+        if action.type == ClickType.IF:
+            mode = str(action.data.get("if_mode", "if")).strip().lower()
+            mode_txt = "IF NOT" if mode == "if_not" else "IF"
+            source_name = str(action.data.get("source_action_name", "-"))
+            then_action = str(action.data.get("then_action", "run_branch")).strip().lower()
+            if then_action == "stop":
+                then_txt = "STOP"
+            else:
+                tgt_idx = action.data.get("target_branch_index")
+                tgt_name = ""
+                try:
+                    if tgt_idx is not None and 0 <= int(tgt_idx) < len(self.script_groups):
+                        tgt_name = str(self.script_groups[int(tgt_idx)].get("name", f"Branch {int(tgt_idx)+1}"))
+                except Exception:
+                    tgt_name = ""
+                then_txt = f"RUN BRANCH {tgt_name or str(tgt_idx)}"
+            cooldown_ms = int(action.data.get("if_cooldown_ms", 500) or 0)
+            return f"{mode_txt} [{source_name} image visible] -> {then_txt} | Cooldown: {cooldown_ms}ms"
+
         if action.type == ClickType.POSITION:
             x = action.data.get('x', 0)
             y = action.data.get('y', 0)
@@ -2577,7 +2853,21 @@ class MainWindow(QMainWindow):
                 f"Image{mode_part}: {os.path.basename(image_path)} | Offset: ({offset_x}, {offset_y})"
                 f"{priority_part}{target_part}"
             )
-        
+
+        if action.type == ClickType.IMAGE_RECOGNITION:
+            image_path = action.data.get("image_path", "")
+            target_title = action.data.get("target_title", "")
+            target_part = f" | Target: {target_title}" if target_title else ""
+            value = str(action.data.get("last_recognized_value", "") or "")
+            status = str(action.data.get("last_recognition_status", "") or "")
+            if status and status != "ok":
+                value_part = f" | OCR: {status}"
+            elif value:
+                value_part = f" | OCR: {value}"
+            else:
+                value_part = " | OCR: (empty)"
+            return f"Image Recognition: {os.path.basename(image_path)}{value_part}{target_part}"
+
         image_path = action.data.get('image_path', '')
         mode_part = f" [{self._format_action_mode_label(action.data)}]"
         priority_level = int(action.data.get('priority_level', 0) or 0)
@@ -2626,6 +2916,10 @@ class MainWindow(QMainWindow):
         """Forward worker-thread callback to Qt main thread."""
         self.action_executed_signal.emit(int(action_index))
 
+    def _on_action_detail_changed_from_worker(self, action_index: int, detail_text: str):
+        """Forward worker-thread detail callback to Qt main thread."""
+        self.action_detail_changed_signal.emit(int(action_index), str(detail_text))
+
     def _on_status_changed_from_worker(self, message: str):
         """Forward worker-thread status callback to Qt main thread."""
         self.status_changed_signal.emit(str(message))
@@ -2656,6 +2950,43 @@ class MainWindow(QMainWindow):
             self._set_action_item_highlight(item, True)
         finally:
             self._updating_table = False
+
+    def _on_action_detail_changed_main_thread(self, action_index: int, detail_text: str):
+        """Refresh one action row details from runtime updates (e.g. OCR result)."""
+        if action_index < 0 or action_index >= len(self._running_action_key_map):
+            return
+
+        key = self._running_action_key_map[action_index]
+        group_index, action_index_in_group = key
+        if not (0 <= group_index < len(self.script_groups)):
+            return
+        actions = self.script_groups[group_index].get("actions", [])
+        if not (0 <= action_index_in_group < len(actions)):
+            return
+        entry = actions[action_index_in_group]
+        action = entry.get("action")
+        if not isinstance(action, ClickAction):
+            return
+        if action.type != ClickType.IMAGE_RECOGNITION:
+            return
+
+        text = str(detail_text or "")
+        if text.startswith("VALUE::"):
+            action.data["last_recognition_status"] = "ok"
+            action.data["last_recognized_value"] = str(text[7:])
+        elif text.startswith("ERROR::"):
+            action.data["last_recognition_status"] = str(text[7:])
+            action.data["last_recognized_value"] = ""
+        else:
+            action.data["last_recognition_status"] = str(text)
+
+        item = self._tree_action_items.get(key)
+        if item:
+            self._updating_table = True
+            try:
+                item.setText(7, self._build_action_details(action))
+            finally:
+                self._updating_table = False
     
     def _is_recording_active(self) -> bool:
         """Check whether any recording mode is active."""
@@ -2970,7 +3301,7 @@ class MainWindow(QMainWindow):
                             action.data["drag_client_y"] = int(dcy)
                         except Exception:
                             pass
-                elif action.type in (ClickType.IMAGE, ClickType.IMAGE_DIRECT):
+                elif action.type in (ClickType.IMAGE, ClickType.IMAGE_DIRECT, ClickType.IMAGE_RECOGNITION):
                     # Keep recorded client coordinates if available to avoid drift.
                     click_client_x = action.data.get("click_client_x")
                     click_client_y = action.data.get("click_client_y")

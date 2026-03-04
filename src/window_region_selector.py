@@ -42,11 +42,12 @@ class WindowRegionSelector(QWidget):
         window_width = window_x2 - window_x1
         window_height = window_y2 - window_y1
         
-        # For widget positioning, clamp top-left to valid range but keep size
-        self.window_x1 = max(0, window_x1)
-        self.window_y1 = max(0, window_y1)
-        
-        # Size stays the same (not clamped individually)
+        # Keep true top-left (can be negative on multi-monitor / DPI setups).
+        # Clamping here causes coordinate drift between drawn overlay and captured region.
+        self.window_x1 = window_x1
+        self.window_y1 = window_y1
+
+        # Size stays the same.
         self.window_width = window_width
         self.window_height = window_height
         
@@ -175,12 +176,12 @@ class WindowRegionSelector(QWidget):
             x2 = max(self.start_pos.x(), self.end_pos.x())
             y2 = max(self.start_pos.y(), self.end_pos.y())
             
-            # Convert to global coordinates using ORIGINAL window rect
-            # (window_x1_orig may be negative due to DPI scaling, that's OK)
-            global_x1 = self.window_x1_orig + x1
-            global_y1 = self.window_y1_orig + y1
-            global_x2 = self.window_x1_orig + x2
-            global_y2 = self.window_y1_orig + y2
+            # Convert to global coordinates using actual overlay origin.
+            # This keeps selection and capture aligned even when window has negative coords.
+            global_x1 = self.window_x1 + x1
+            global_y1 = self.window_y1 + y1
+            global_x2 = self.window_x1 + x2
+            global_y2 = self.window_y1 + y2
             
             AppLogger.debug(f"Window rect (original): ({self.window_x1_orig}, {self.window_y1_orig}, {self.window_x2_orig}, {self.window_y2_orig})")
             AppLogger.debug(f"Selection local: ({x1}, {y1}, {x2}, {y2})")
@@ -189,7 +190,9 @@ class WindowRegionSelector(QWidget):
             # Debug: Save a test screenshot of the entire window
             try:
                 from PIL import ImageGrab
-                test_window = ImageGrab.grab(bbox=(self.window_x1, self.window_y1, self.window_x2, self.window_y2))
+                test_window = ImageGrab.grab(
+                    bbox=(self.window_x1_orig, self.window_y1_orig, self.window_x2_orig, self.window_y2_orig)
+                )
                 test_window.save("test_window_capture.png")
                 AppLogger.debug(f"Saved test_window_capture.png - size: {test_window.size}")
                 

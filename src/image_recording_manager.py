@@ -54,6 +54,7 @@ class ImageRecordingManager:
         self.key_bindings = key_bindings or {}
         self._waiting_for_click_position = False
         self._waiting_image_path = ""
+        self._waiting_region: Optional[tuple[int, int, int, int]] = None
         
     def start(self, target_window: Optional[Window] = None, require_click_position: bool = True):
         """Start image recording process"""
@@ -184,9 +185,9 @@ class ImageRecordingManager:
         AppLogger.debug(f"Image saved successfully")
         
         # Show confirmation dialog
-        self._show_confirmation_dialog(image_path)
+        self._show_confirmation_dialog(image_path, int(x1), int(y1), int(x2), int(y2))
     
-    def _show_confirmation_dialog(self, image_path: str):
+    def _show_confirmation_dialog(self, image_path: str, x1: int, y1: int, x2: int, y2: int):
         """Show dialog to confirm captured image"""
         # Use non-modal dialog so keyboard listener remains active
         dialog = ImageConfirmationDialog(image_path, parent=self.parent)
@@ -198,7 +199,7 @@ class ImageRecordingManager:
                 pass
             if self.require_click_position:
                 # Proceed to ask for click position
-                self._show_click_position_dialog(image_path)
+                self._show_click_position_dialog(image_path, int(x1), int(y1), int(x2), int(y2))
             else:
                 # Record image-only action (direct click on matched image).
                 recorded = {
@@ -207,6 +208,10 @@ class ImageRecordingManager:
                     "click_y": None,
                     "click_client_x": None,
                     "click_client_y": None,
+                    "region_x1": int(x1),
+                    "region_y1": int(y1),
+                    "region_x2": int(x2),
+                    "region_y2": int(y2),
                     "action_mode": "mouse_click",
                     "mouse_button": "left",
                     "target_hwnd": int(self.target_window.hwnd) if self.target_window else None,
@@ -239,7 +244,7 @@ class ImageRecordingManager:
         self.image_dialogs.append(dialog)
         dialog.show()
     
-    def _show_click_position_dialog(self, image_path: str):
+    def _show_click_position_dialog(self, image_path: str, x1: int, y1: int, x2: int, y2: int):
         """Show dialog asking user to set click position"""
         if not self.is_recording:
             return
@@ -250,6 +255,7 @@ class ImageRecordingManager:
         # Store current image path and dialog
         self._waiting_for_click_position = True
         self._waiting_image_path = image_path
+        self._waiting_region = (int(x1), int(y1), int(x2), int(y2))
 
         # If the dialog emits that recording was cancelled, handle it
         def on_cancelled():
@@ -258,6 +264,7 @@ class ImageRecordingManager:
             except:
                 pass
             self._waiting_for_click_position = False
+            self._waiting_region = None
             # remove the last image saved (if exists)
             try:
                 os.remove(image_path)
@@ -325,6 +332,10 @@ class ImageRecordingManager:
                 "click_y": int(y),
                 "click_client_x": click_client_x,
                 "click_client_y": click_client_y,
+                "region_x1": int(self._waiting_region[0]) if self._waiting_region else None,
+                "region_y1": int(self._waiting_region[1]) if self._waiting_region else None,
+                "region_x2": int(self._waiting_region[2]) if self._waiting_region else None,
+                "region_y2": int(self._waiting_region[3]) if self._waiting_region else None,
                 "action_mode": str(action_data.get("action_mode", "mouse_click")).lower(),
                 "mouse_button": str(action_data.get("mouse_button", "left")).lower(),
                 "scroll_clicks": action_data.get("scroll_clicks"),
@@ -357,6 +368,7 @@ class ImageRecordingManager:
             
             self._waiting_for_click_position = False
             self._waiting_image_path = ""
+            self._waiting_region = None
             current_count = len(self.recorded_images)
             
             # Update dialog if it exists
@@ -390,6 +402,7 @@ class ImageRecordingManager:
         self.is_recording = False
         self._waiting_for_click_position = False
         self._waiting_image_path = ""
+        self._waiting_region = None
         
         # Unregister callbacks
         self.keyboard_listener.unregister_callback('esc', self._on_esc)
@@ -410,6 +423,7 @@ class ImageRecordingManager:
         self.is_recording = False
         self._waiting_for_click_position = False
         self._waiting_image_path = ""
+        self._waiting_region = None
         
         # Cleanup
         self.keyboard_listener.unregister_callback('esc', self._on_esc)

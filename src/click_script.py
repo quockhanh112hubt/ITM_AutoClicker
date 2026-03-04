@@ -15,6 +15,8 @@ class ClickType(Enum):
     POSITION = "position"  # Click at specific coordinates
     IMAGE = "image"        # Click at recorded point when image is found
     IMAGE_DIRECT = "image_direct"  # Click directly on matched image
+    IMAGE_RECOGNITION = "image_recognition"  # OCR text from matched image region
+    IF = "if"              # Conditional logic row
 
 
 class ClickAction:

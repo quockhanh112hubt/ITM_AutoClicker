@@ -7,7 +7,7 @@
   "hotkey_end": "end",
   "drag_mode": "real",
   "use_real_mouse": false,
-  "always_on_top": true,
+  "always_on_top": false,
   "hotkey_home": "home",
   "hotkey_record": "f10"
 }

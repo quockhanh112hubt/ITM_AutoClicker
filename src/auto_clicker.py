@@ -5,6 +5,11 @@ import pyautogui
 import time
 import threading
 from typing import Callable, Optional, Dict, Tuple, Any
+import shutil
+import sys
+import cv2
+import numpy as np
+from PIL import ImageGrab
 from src.click_script import ClickScript, ClickAction, ClickType
 from src.image_matcher import ImageMatcher
 from src.constants import (
@@ -20,6 +25,11 @@ import os
 import win32api
 import win32con
 import win32gui
+
+try:
+    import pytesseract
+except Exception:
+    pytesseract = None
 
 
 class AutoClicker:
@@ -76,10 +86,17 @@ class AutoClicker:
         self._execution_thread: Optional[threading.Thread] = None
         self._on_status_changed: Optional[Callable] = None
         self._on_action_executed: Optional[Callable] = None
+        self._on_action_detail_changed: Optional[Callable] = None
         self._priority_last_trigger_at = {}
         self._action_execution_totals = {}
         self._next_action_index = 0
         self._cycle_executed_by_index: Dict[int, bool] = {}
+        self._pending_runtime_indices: list[int] = []
+        self._if_last_trigger_at: Dict[int, float] = {}
+        self._if_trigger_timestamps: list[float] = []
+        self._if_trigger_limit = 5
+        self._if_trigger_window_sec = 1.0
+        self._tesseract_cmd = self._resolve_tesseract_cmd()
     
     def set_delay(self, delay_ms: int) -> None:
         """
@@ -141,6 +158,10 @@ class AutoClicker:
     def set_on_action_executed(self, callback: Callable) -> None:
         """Set callback(action_index) when an action is actually executed."""
         self._on_action_executed = callback
+
+    def set_on_action_detail_changed(self, callback: Callable) -> None:
+        """Set callback(action_index, detail_text) for live detail updates."""
+        self._on_action_detail_changed = callback
     
     def _notify_status(self, message: str) -> None:
         """Notify status change"""
@@ -151,6 +172,11 @@ class AutoClicker:
         """Notify when an action is executed."""
         if self._on_action_executed:
             self._on_action_executed(int(action_index))
+
+    def _notify_action_detail_changed(self, action_index: int, detail_text: str) -> None:
+        """Notify when one action detail text should be refreshed."""
+        if self._on_action_detail_changed:
+            self._on_action_detail_changed(int(action_index), str(detail_text))
     
     def execute_script(self, script: ClickScript) -> None:
         """
@@ -178,6 +204,9 @@ class AutoClicker:
         self._action_execution_totals.clear()
         self._next_action_index = 0
         self._cycle_executed_by_index = {}
+        self._pending_runtime_indices = []
+        self._if_last_trigger_at = {}
+        self._if_trigger_timestamps = []
         self._notify_status("Starting auto click...")
         
         self._execution_thread = threading.Thread(target=self._execute_loop, daemon=EXECUTION_THREAD_DAEMON)
@@ -214,20 +243,33 @@ class AutoClicker:
         if not actions:
             time.sleep(0.02)
             return
+        if (not self.is_paused) and self.is_running:
+            self._process_if_triggers(actions)
+            if (not self.is_running) or self.is_paused:
+                return
         if self._next_action_index < 0 or self._next_action_index >= len(actions):
             self._next_action_index = 0
             self._cycle_executed_by_index.clear()
 
-        action_index = int(self._next_action_index)
-        action = actions[action_index]
-
-        # Prepare next index now, so resume continues from next action.
-        next_index = action_index + 1
+        from_pending = False
         will_wrap_cycle = False
-        if next_index >= len(actions):
-            next_index = 0
-            will_wrap_cycle = True
-        self._next_action_index = next_index
+        if self._pending_runtime_indices:
+            action_index = int(self._pending_runtime_indices.pop(0))
+            from_pending = True
+            if action_index < 0 or action_index >= len(actions):
+                return
+        else:
+            action_index = int(self._next_action_index)
+            if action_index < 0 or action_index >= len(actions):
+                self._next_action_index = 0
+                action_index = 0
+            # Prepare next index now, so resume continues from next action.
+            next_index = action_index + 1
+            if next_index >= len(actions):
+                next_index = 0
+                will_wrap_cycle = True
+            self._next_action_index = next_index
+        action = actions[action_index]
 
         if (not self.is_running) or self.is_paused:
             return
@@ -259,6 +301,11 @@ class AutoClicker:
                 executed = self._execute_image_click(action)
             elif action.type == ClickType.IMAGE_DIRECT:
                 executed = self._execute_image_direct_click(action)
+            elif action.type == ClickType.IMAGE_RECOGNITION:
+                executed = self._execute_image_recognition(action, action_index)
+            elif action.type == ClickType.IF:
+                # IF rows are processed by _process_if_triggers with priority/cooldown.
+                executed = False
             self._cycle_executed_by_index[action_index] = bool(executed)
 
             if executed:
@@ -267,7 +314,7 @@ class AutoClicker:
 
             # Clear cycle results only after the last action in the cycle
             # has already consumed parent states.
-            if will_wrap_cycle:
+            if will_wrap_cycle and (not from_pending):
                 self._cycle_executed_by_index.clear()
 
             if (not self.is_running) or self.is_paused:
@@ -280,9 +327,95 @@ class AutoClicker:
             self._execute_priority_actions()
         except Exception as e:
             self._cycle_executed_by_index[action_index] = False
-            if will_wrap_cycle:
+            if will_wrap_cycle and (not from_pending):
                 self._cycle_executed_by_index.clear()
             self._notify_status(f"Error executing action: {e}")
+
+    def _process_if_triggers(self, actions: list[ClickAction]) -> None:
+        """Evaluate IF/IF NOT rows by priority and trigger immediate actions."""
+        if not actions or not self.is_running or self.is_paused:
+            return
+        candidates = []
+        for idx, action in enumerate(actions):
+            if action.type != ClickType.IF:
+                continue
+            if not self._can_execute_by_limit(idx, action):
+                continue
+            prio = int(action.data.get("priority_level", 0) or 0)
+            candidates.append((prio, idx, action))
+        if not candidates:
+            return
+        # Higher priority first; equal priority keeps normal order.
+        candidates.sort(key=lambda x: (-int(x[0]), int(x[1])))
+        now = time.time()
+        for _prio, idx, action in candidates:
+            if not self.is_running or self.is_paused:
+                break
+            cooldown_ms = int(action.data.get("if_cooldown_ms", 500) or 0)
+            last = float(self._if_last_trigger_at.get(int(idx), 0.0))
+            if cooldown_ms > 0 and (now - last) * 1000.0 < cooldown_ms:
+                continue
+
+            image_path = str(action.data.get("__if_image_path", "") or "")
+            if not image_path or (not os.path.exists(image_path)):
+                continue
+            target_hwnd = action.data.get("target_hwnd")
+            target_title = action.data.get("target_title", "")
+            is_found = False
+            if target_hwnd is not None:
+                try:
+                    th = int(target_hwnd)
+                    ok, error = self._validate_target_window(th)
+                    if not ok:
+                        self._stop_due_to_target_error(error, target_title)
+                        return
+                    is_found = self.image_matcher.find_image_in_window(image_path, th) is not None
+                except Exception:
+                    is_found = False
+            else:
+                try:
+                    is_found = self.image_matcher.find_image(image_path) is not None
+                except Exception:
+                    is_found = False
+
+            mode = str(action.data.get("if_mode", "if")).strip().lower()
+            cond_ok = bool(is_found) if mode != "if_not" else (not bool(is_found))
+            if not cond_ok:
+                continue
+
+            # Anti-loop guard: too many IF triggers in short window => stop.
+            ts_now = time.time()
+            self._if_trigger_timestamps = [t for t in self._if_trigger_timestamps if (ts_now - t) <= self._if_trigger_window_sec]
+            self._if_trigger_timestamps.append(ts_now)
+            if len(self._if_trigger_timestamps) > int(self._if_trigger_limit):
+                self.is_running = False
+                self._notify_status("Stopped: IF anti-loop guard triggered (>5 triggers/sec)")
+                return
+
+            self._if_last_trigger_at[int(idx)] = ts_now
+            self._action_execution_totals[idx] = int(self._action_execution_totals.get(idx, 0)) + 1
+            self._notify_action_executed(idx)
+
+            then_action = str(action.data.get("then_action", "run_branch")).strip().lower()
+            source_name = str(action.data.get("source_action_name", "source"))
+            if then_action == "stop":
+                self.is_running = False
+                self._notify_status(f"Stopped by IF rule: {source_name}")
+                return
+
+            run_indices = action.data.get("__run_branch_runtime_indices") or []
+            queue = []
+            for ridx in run_indices:
+                try:
+                    ri = int(ridx)
+                except Exception:
+                    continue
+                if 0 <= ri < len(actions):
+                    queue.append(ri)
+            if queue:
+                # Run target branch immediately, then continue previous flow.
+                self._pending_runtime_indices = queue + list(self._pending_runtime_indices)
+                self._notify_status(f"IF triggered: run branch now ({len(queue)} step(s))")
     
     def _execute_priority_actions(self) -> None:
         """Execute currently-triggered priority image actions in ascending priority order."""
@@ -729,6 +862,162 @@ class AutoClicker:
                 f"Image direct {action_mode}: {os.path.basename(image_path)} -> screen ({mx}, {my})"
             )
             return True
+
+    def _match_template_region(self, template_path: str, target_hwnd: Optional[int] = None) -> Optional[Tuple[int, int, int, int]]:
+        """Find matched template region as screen rect (x1, y1, x2, y2)."""
+        if not os.path.exists(template_path):
+            return None
+        template = cv2.imread(template_path)
+        if template is None:
+            return None
+        th, tw = template.shape[:2]
+
+        if target_hwnd is not None:
+            captured = self.image_matcher._capture_window_image(int(target_hwnd))
+            if captured is None:
+                return None
+            window_image, (left, top, _, _) = captured
+            result = cv2.matchTemplate(window_image, template, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(result)
+            if max_val < float(self.image_matcher.confidence):
+                return None
+            x1 = int(left + max_loc[0])
+            y1 = int(top + max_loc[1])
+            return x1, y1, int(x1 + tw), int(y1 + th)
+
+        screenshot = ImageGrab.grab()
+        screenshot_cv = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
+        result = cv2.matchTemplate(screenshot_cv, template, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, max_loc = cv2.minMaxLoc(result)
+        if max_val < float(self.image_matcher.confidence):
+            return None
+        x1 = int(max_loc[0])
+        y1 = int(max_loc[1])
+        return x1, y1, int(x1 + tw), int(y1 + th)
+
+    def _resolve_tesseract_cmd(self) -> Optional[str]:
+        """Resolve tesseract executable path with bundled-first strategy."""
+        if pytesseract is None:
+            return None
+
+        candidates = []
+
+        # 1) Explicit environment override (power users / CI).
+        env_cmd = os.environ.get("TESSERACT_CMD", "").strip()
+        if env_cmd:
+            candidates.append(env_cmd)
+
+        # 2) Bundled path in PyInstaller temp folder.
+        base_meipass = getattr(sys, "_MEIPASS", "")
+        if base_meipass:
+            candidates.append(os.path.join(base_meipass, "resource", "tesseract", "tesseract.exe"))
+
+        # 3) Dev/runtime relative path in repository.
+        app_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        candidates.append(os.path.join(app_root, "resource", "tesseract", "tesseract.exe"))
+
+        # 4) Common Windows install locations.
+        candidates.append(r"C:\Program Files\Tesseract-OCR\tesseract.exe")
+        candidates.append(r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe")
+
+        # 5) PATH lookup as final fallback.
+        which_cmd = shutil.which("tesseract")
+        if which_cmd:
+            candidates.append(which_cmd)
+
+        for cmd in candidates:
+            if not cmd:
+                continue
+            try:
+                if os.path.isfile(cmd):
+                    pytesseract.pytesseract.tesseract_cmd = cmd
+                    return cmd
+            except Exception:
+                continue
+        return None
+
+    def _ocr_region_text(self, x1: int, y1: int, x2: int, y2: int) -> Tuple[bool, str]:
+        """Run OCR on screen region; returns (ok, text_or_reason)."""
+        if pytesseract is None:
+            return False, "OCR unavailable: install `pytesseract` and Tesseract OCR"
+        if not self._tesseract_cmd:
+            # Re-check in case user copied bundled OCR after app started.
+            self._tesseract_cmd = self._resolve_tesseract_cmd()
+        if not self._tesseract_cmd:
+            return False, "OCR engine not found. Put Tesseract in resource/tesseract or install system Tesseract."
+        try:
+            if x2 <= x1 or y2 <= y1:
+                return False, "OCR failed: invalid region"
+            img = ImageGrab.grab(bbox=(int(x1), int(y1), int(x2), int(y2))).convert("RGB")
+            raw_text = pytesseract.image_to_string(img, config="--psm 6")
+            text = " ".join(str(raw_text or "").split())
+            return True, text
+        except Exception as e:
+            return False, f"OCR failed: {e}"
+
+    def _execute_image_recognition(self, action: ClickAction, action_index: int) -> bool:
+        """Recognize text from matched image region and push value to row detail."""
+        image_path = action.data.get("image_path", "")
+        target_hwnd = action.data.get("target_hwnd")
+        target_title = action.data.get("target_title", "")
+
+        if not image_path or not os.path.exists(image_path):
+            msg = f"Image file not found: {image_path}"
+            action.data["last_recognized_value"] = ""
+            action.data["last_recognition_status"] = msg
+            self._notify_action_detail_changed(action_index, f"ERROR::{msg}")
+            self._notify_status(msg)
+            return False
+
+        if target_hwnd is not None:
+            try:
+                target_hwnd = int(target_hwnd)
+            except Exception:
+                target_hwnd = None
+        if target_hwnd is not None:
+            ok, error = self._validate_target_window(target_hwnd)
+            if not ok:
+                self._stop_due_to_target_error(error, target_title)
+                return False
+
+        region = self._match_template_region(str(image_path), target_hwnd)
+        if region is None:
+            rx1 = action.data.get("region_x1")
+            ry1 = action.data.get("region_y1")
+            rx2 = action.data.get("region_x2")
+            ry2 = action.data.get("region_y2")
+            if None not in (rx1, ry1, rx2, ry2):
+                try:
+                    region = (int(rx1), int(ry1), int(rx2), int(ry2))
+                except Exception:
+                    region = None
+            if region is None:
+                msg = f"Image not found: {os.path.basename(image_path)}"
+                action.data["last_recognized_value"] = ""
+                action.data["last_recognition_status"] = msg
+                self._notify_action_detail_changed(action_index, f"ERROR::{msg}")
+                self._notify_status(msg)
+                return False
+
+        ok, text_or_reason = self._ocr_region_text(*region)
+        if not ok:
+            action.data["last_recognized_value"] = ""
+            action.data["last_recognition_status"] = text_or_reason
+            self._notify_action_detail_changed(action_index, f"ERROR::{text_or_reason}")
+            self._notify_status(text_or_reason)
+            return False
+
+        recognized = str(text_or_reason or "")
+        action.data["last_recognized_value"] = recognized
+        action.data["last_recognition_status"] = "ok"
+        x1, y1, x2, y2 = region
+        msg = (
+            f"OCR: '{recognized}'" if recognized else "OCR: (empty)"
+        )
+        msg = f"{msg} @ ({x1}, {y1}, {max(0, x2 - x1)}x{max(0, y2 - y1)})"
+        self._notify_action_detail_changed(action_index, f"VALUE::{recognized}")
+        self._notify_status(msg)
+        return True
     
     def _validate_target_window(self, hwnd: int) -> Tuple[bool, str]:
         """Validate target window state before background click."""
