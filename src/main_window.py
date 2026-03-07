@@ -1686,7 +1686,9 @@ class MainWindow(QMainWindow):
             "id": uuid.uuid4().hex,
             "parent_id": None,
             "max_executions": None,
-            "name": f"QIF {sum(1 for g in self.script_groups for e in g.get('actions', []) if isinstance(e.get('action'), ClickAction) and e.get('action').type == ClickType.IF) + 1}",
+            "name": self._make_unique_action_name(
+                f"QIF {sum(1 for g in self.script_groups for e in g.get('actions', []) if isinstance(e.get('action'), ClickAction) and e.get('action').type == ClickType.IF) + 1}"
+            ),
             "enabled": True,
             "action": action,
         }
@@ -1748,7 +1750,9 @@ class MainWindow(QMainWindow):
             "id": uuid.uuid4().hex,
             "parent_id": None,
             "max_executions": None,
-            "name": f"IF {sum(1 for g in self.script_groups for e in g.get('actions', []) if isinstance(e.get('action'), ClickAction) and e.get('action').type == ClickType.IF) + 1}",
+            "name": self._make_unique_action_name(
+                f"IF {sum(1 for g in self.script_groups for e in g.get('actions', []) if isinstance(e.get('action'), ClickAction) and e.get('action').type == ClickType.IF) + 1}"
+            ),
             "enabled": True,
             "action": action,
         }
@@ -2080,6 +2084,28 @@ class MainWindow(QMainWindow):
             self.statusBar.showMessage("Select a branch or action to rename")
             return
         self.on_script_tree_item_double_clicked(item, 0)
+
+    def _update_if_action_name_references(self, action_id: str, new_name: str) -> int:
+        """Update IF rows that reference one action id as source or run-action target."""
+        ref_id = str(action_id or "").strip()
+        if not ref_id:
+            return 0
+        updated_count = 0
+        for group in self.script_groups:
+            for entry in group.get("actions", []):
+                action = entry.get("action")
+                if not isinstance(action, ClickAction) or action.type != ClickType.IF:
+                    continue
+                changed = False
+                if str(action.data.get("source_action_id", "") or "") == ref_id:
+                    action.data["source_action_name"] = str(new_name)
+                    changed = True
+                if str(action.data.get("target_action_id", "") or "") == ref_id:
+                    action.data["target_action_name"] = str(new_name)
+                    changed = True
+                if changed:
+                    updated_count += 1
+        return updated_count
     
     def _create_priority_combo(self, group_index: int, action_index: int, action: ClickAction) -> QComboBox:
         """Create priority combo for image action rows."""
@@ -2265,9 +2291,22 @@ class MainWindow(QMainWindow):
             new_name = (name or "").strip()
             if not new_name:
                 return
+            action_id = actions[action_index].get("id")
+            if self._is_action_name_duplicate(new_name, exclude_action_id=str(action_id or "")):
+                QMessageBox.warning(
+                    self,
+                    "Duplicate Action Name",
+                    "Action name must be unique.\nPlease choose another name."
+                )
+                return
             actions[action_index]["name"] = new_name
+            ref_updates = self._update_if_action_name_references(action_id, new_name)
             item.setText(0, new_name)
-            self.statusBar.showMessage(f"Renamed action: {new_name}")
+            if ref_updates > 0:
+                self.update_table()
+                self.statusBar.showMessage(f"Renamed action: {new_name} | Updated {ref_updates} IF reference(s)")
+            else:
+                self.statusBar.showMessage(f"Renamed action: {new_name}")
 
     def on_script_tree_current_item_changed(self, current: QTreeWidgetItem, previous: QTreeWidgetItem):
         """Track last selected branch to keep add-action flow smooth across refreshes."""
@@ -3071,14 +3110,43 @@ class MainWindow(QMainWindow):
             branch_index = 0
         
         actions = self.script_groups[int(branch_index)].setdefault("actions", [])
+        action_name = self._make_unique_action_name(f"Action {len(actions) + 1}")
         actions.append({
             "id": uuid.uuid4().hex,
             "parent_id": None,
             "max_executions": None,
-            "name": f"Action {len(actions) + 1}",
+            "name": action_name,
             "enabled": True,
             "action": action
         })
+
+    def _is_action_name_duplicate(self, name: str, exclude_action_id: str | None = None) -> bool:
+        """Return True when another action row already uses the same name."""
+        normalized = str(name or "").strip().casefold()
+        if not normalized:
+            return False
+        exclude_id = str(exclude_action_id or "").strip()
+        for group in self.script_groups:
+            for entry in group.get("actions", []):
+                entry_id = str(entry.get("id") or "").strip()
+                if exclude_id and entry_id == exclude_id:
+                    continue
+                entry_name = str(entry.get("name", "") or "").strip()
+                if entry_name.casefold() == normalized:
+                    return True
+        return False
+
+    def _make_unique_action_name(self, base_name: str) -> str:
+        """Generate a globally unique action name."""
+        base = str(base_name or "").strip() or "Action"
+        if not self._is_action_name_duplicate(base):
+            return base
+        index = 2
+        while True:
+            candidate = f"{base} ({index})"
+            if not self._is_action_name_duplicate(candidate):
+                return candidate
+            index += 1
     
     def _build_runtime_script_and_key_map(self):
         """Build executable flat script from current tree hierarchy/check states."""
