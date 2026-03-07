@@ -7,10 +7,8 @@ import json
 import uuid
 import threading
 import webbrowser
-import tempfile
 import subprocess
 import urllib.request
-import textwrap
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTabWidget,
@@ -453,28 +451,29 @@ class MainWindow(QMainWindow):
         worker.start()
 
     def _download_update_worker(self, info: UpdateInfo):
-        """Download update asset into temp file."""
+        """Download update asset into sibling .new file beside current exe."""
         try:
+            target_exe = os.path.abspath(sys.executable)
+            if not target_exe.lower().endswith(".exe"):
+                raise RuntimeError("Current executable path is not an .exe file")
+            download_path = f"{target_exe}.new"
+            if os.path.exists(download_path):
+                try:
+                    os.remove(download_path)
+                except Exception:
+                    pass
             request = urllib.request.Request(
                 info.asset_download_url,
                 headers={"User-Agent": "ITM-AutoClicker-Updater"},
             )
             with urllib.request.urlopen(request, timeout=30) as response:
-                fd, temp_path = tempfile.mkstemp(suffix=".exe", prefix="itm_update_")
-                try:
-                    with os.fdopen(fd, "wb") as handle:
-                        while True:
-                            chunk = response.read(1024 * 256)
-                            if not chunk:
-                                break
-                            handle.write(chunk)
-                except Exception:
-                    try:
-                        os.close(fd)
-                    except Exception:
-                        pass
-                    raise
-            self.update_download_completed_signal.emit({"ok": True, "info": info, "temp_path": temp_path})
+                with open(download_path, "wb") as handle:
+                    while True:
+                        chunk = response.read(1024 * 256)
+                        if not chunk:
+                            break
+                        handle.write(chunk)
+            self.update_download_completed_signal.emit({"ok": True, "info": info, "temp_path": download_path})
         except Exception as exc:
             self.update_download_completed_signal.emit({"ok": False, "info": info, "error": str(exc)})
 
@@ -500,7 +499,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Download Update", f"Unable to install update.\n\nReason: {exc}")
 
     def _launch_self_update(self, downloaded_exe_path: str, info: UpdateInfo | None):
-        """Create updater batch file, exit current app, replace EXE, and restart."""
+        """Create update.bat beside exe, exit old app, then rename .new -> .exe and restart."""
         current_exe = os.path.abspath(sys.executable)
         if not current_exe.lower().endswith(".exe"):
             raise RuntimeError("Current executable path is not an .exe file")
@@ -509,106 +508,36 @@ class MainWindow(QMainWindow):
 
         app_dir = os.path.dirname(current_exe)
         exe_name = os.path.basename(current_exe)
-        process_name = os.path.splitext(exe_name)[0]
-        backup_path = os.path.join(app_dir, f"{exe_name}.bak")
-        updater_ps1 = os.path.join(tempfile.gettempdir(), "itm_autoclicker_update.ps1")
-        current_pid = os.getpid()
+        new_path = f"{current_exe}.new"
+        if os.path.abspath(downloaded_exe_path) != os.path.abspath(new_path):
+            raise RuntimeError("Downloaded update file is not the expected .new file")
+        backup_path = f"{current_exe}.bak"
+        updater_bat = os.path.join(app_dir, "update.bat")
 
-        def _ps_quote(value: str) -> str:
-            return "'" + str(value).replace("'", "''") + "'"
-
-        script = textwrap.dedent(f"""
-        $ErrorActionPreference = 'SilentlyContinue'
-        $target = {_ps_quote(current_exe)}
-        $download = {_ps_quote(downloaded_exe_path)}
-        $backup = {_ps_quote(backup_path)}
-        $appDir = {_ps_quote(app_dir)}
-        $processName = {_ps_quote(process_name)}
-        $waitPid = {int(current_pid)}
-        $logPath = Join-Path $env:TEMP 'itm_autoclicker_update.log'
-
-        function Write-Log([string]$message) {{
-            Add-Content -Path $logPath -Value ("[{0}] {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $message)
-        }}
-
-        Write-Log "Updater started for $target"
-
-        while (Get-Process -Id $waitPid -ErrorAction SilentlyContinue) {{
-            Start-Sleep -Milliseconds 500
-        }}
-
-        Start-Sleep -Seconds 2
-
-        $replaced = $false
-        for ($i = 0; $i -lt 10; $i++) {{
-            try {{
-                if (Test-Path $backup) {{ Remove-Item $backup -Force }}
-                if (Test-Path $target) {{ Move-Item -Path $target -Destination $backup -Force }}
-                Copy-Item -Path $download -Destination $target -Force
-                if (Test-Path $target) {{
-                    $replaced = $true
-                    Write-Log "Replacement succeeded on attempt $($i + 1)"
-                    break
-                }}
-            }} catch {{
-                Write-Log "Replacement failed on attempt $($i + 1): $($_.Exception.Message)"
-            }}
-            Start-Sleep -Seconds 1
-        }}
-
-        if (-not $replaced) {{
-            Write-Log "Replacement failed, updater exiting"
-            exit 1
-        }}
-
-        $started = $false
-        for ($i = 0; $i -lt 5; $i++) {{
-            try {{
-                Start-Process -FilePath $target -WorkingDirectory $appDir
-                Write-Log "Launch requested on attempt $($i + 1)"
-                Start-Sleep -Seconds 4
-                if (Get-Process -Name $processName -ErrorAction SilentlyContinue) {{
-                    $started = $true
-                    Write-Log "New process detected"
-                    break
-                }}
-            }} catch {{
-                Write-Log "Launch failed on attempt $($i + 1): $($_.Exception.Message)"
-            }}
-            Start-Sleep -Seconds 2
-        }}
-
-        if (-not $started -and (Test-Path $backup)) {{
-            Write-Log "Launch failed, restoring backup"
-            try {{
-                if (Test-Path $target) {{ Remove-Item $target -Force }}
-                Move-Item -Path $backup -Destination $target -Force
-                Start-Sleep -Seconds 2
-                Start-Process -FilePath $target -WorkingDirectory $appDir
-                Write-Log "Backup restored and launched"
-            }} catch {{
-                Write-Log "Backup restore failed: $($_.Exception.Message)"
-            }}
-        }} else {{
-            if (Test-Path $download) {{ Remove-Item $download -Force }}
-        }}
-
-        Start-Sleep -Seconds 1
-        Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force
-        """).strip()
-        with open(updater_ps1, "w", encoding="utf-8", newline="\r\n") as handle:
+        script = "\r\n".join([
+            "@echo off",
+            "setlocal",
+            f'set "TARGET={current_exe}"',
+            f'set "NEWFILE={new_path}"',
+            f'set "BACKUP={backup_path}"',
+            "timeout /t 2 /nobreak >nul",
+            "if not exist \"%NEWFILE%\" goto cleanup",
+            "if exist \"%BACKUP%\" del /f /q \"%BACKUP%\" >nul 2>nul",
+            "if exist \"%TARGET%\" ren \"%TARGET%\" \"" + os.path.basename(backup_path) + "\"",
+            "ren \"%NEWFILE%\" \"" + exe_name + "\"",
+            "start \"\" \"%TARGET%\"",
+            "if exist \"%BACKUP%\" del /f /q \"%BACKUP%\" >nul 2>nul",
+            ":cleanup",
+            "del /f /q \"%~f0\" >nul 2>nul",
+            "endlocal",
+        ])
+        with open(updater_bat, "w", encoding="utf-8", newline="\r\n") as handle:
             handle.write(script)
 
         subprocess.Popen(
-            [
-                "powershell.exe",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                updater_ps1,
-            ],
+            ["cmd.exe", "/c", updater_bat],
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            cwd=app_dir,
         )
         latest = info.latest_version if isinstance(info, UpdateInfo) else ""
         self.statusBar.showMessage(f"Installing update {latest} and restarting...")
