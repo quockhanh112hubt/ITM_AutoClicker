@@ -86,6 +86,7 @@ class AutoClicker:
         self.current_script: Optional[ClickScript] = None
         self.image_matcher = ImageMatcher(confidence=image_confidence)
         self._execution_thread: Optional[threading.Thread] = None
+        self._recognition_thread: Optional[threading.Thread] = None
         self._on_status_changed: Optional[Callable] = None
         self._on_action_executed: Optional[Callable] = None
         self._on_action_detail_changed: Optional[Callable] = None
@@ -226,18 +227,33 @@ class AutoClicker:
         
         self._execution_thread = threading.Thread(target=self._execute_loop, daemon=EXECUTION_THREAD_DAEMON)
         self._execution_thread.start()
+        self._recognition_thread = threading.Thread(target=self._recognition_loop, daemon=EXECUTION_THREAD_DAEMON)
+        self._recognition_thread.start()
     
     def _execute_loop(self) -> None:
         """Main execution loop"""
         try:
             while self.is_running:
                 if not self.is_paused and self.current_script:
-                    self._poll_image_recognition_actions()
                     self._execute_once()
                 else:
                     time.sleep(0.02)
         except Exception as e:
             self._notify_status(f"Error: {e}")
+        finally:
+            self.is_running = False
+
+    def _recognition_loop(self) -> None:
+        """Poll IMAGE_RECOGNITION rows on a dedicated worker so OCR latency does not slow action execution."""
+        try:
+            while self.is_running:
+                if not self.is_paused and self.current_script:
+                    self._poll_image_recognition_actions()
+                    time.sleep(0.01)
+                else:
+                    time.sleep(0.02)
+        except Exception as e:
+            self._notify_status(f"Recognition error: {e}")
         finally:
             self.is_running = False
             self._notify_status("Auto click stopped")
@@ -1717,4 +1733,6 @@ class AutoClicker:
         self._cycle_executed_by_index.clear()
         if self._execution_thread:
             self._execution_thread.join(timeout=ACTION_EXECUTION_THREAD_TIMEOUT)
+        if self._recognition_thread:
+            self._recognition_thread.join(timeout=ACTION_EXECUTION_THREAD_TIMEOUT)
         self._notify_status("Stopped")
