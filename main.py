@@ -28,6 +28,7 @@ from PyQt6.QtGui import QIcon
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(False)
     icon_path = os.path.join(os.path.dirname(__file__), "resource", "Icon.ico")
     if os.path.exists(icon_path):
         app.setWindowIcon(QIcon(icon_path))

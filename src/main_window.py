@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
     QLabel, QSpinBox, QFileDialog, QMessageBox, QDialog,
     QDialogButtonBox, QRadioButton, QButtonGroup, QStatusBar, QFormLayout,
     QComboBox, QTreeWidget, QTreeWidgetItem, QInputDialog, QToolButton, QCheckBox, QMenu, QApplication, QLineEdit,
-    QAbstractItemView
+    QAbstractItemView, QSystemTrayIcon
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QPixmap, QIcon, QCursor, QColor, QBrush
@@ -129,16 +129,83 @@ class MainWindow(QMainWindow):
         self.lbl_about_version: QLabel | None = None
         self.btn_check_update: QPushButton | None = None
         self.btn_open_releases: QPushButton | None = None
+        self.tray_icon: QSystemTrayIcon | None = None
+        self._tray_message_shown = False
+        self._is_exiting = False
         
         # Setup UI
         self.setup_ui()
         self._apply_always_on_top_to_main()
+        self._setup_system_tray()
         self.keyboard_listener.start()
         
         # Update table
         self.update_table()
         self._refresh_about_update_ui()
         QTimer.singleShot(1200, self._auto_check_for_updates_on_startup)
+
+    def _setup_system_tray(self):
+        """Initialize system tray icon and menu."""
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        self.tray_icon = QSystemTrayIcon(self)
+        icon = self.windowIcon()
+        if icon.isNull():
+            app_icon = self._icons.get("app")
+            if isinstance(app_icon, QIcon) and (not app_icon.isNull()):
+                icon = app_icon
+        if not icon.isNull():
+            self.tray_icon.setIcon(icon)
+        self.tray_icon.setToolTip(APP_NAME)
+
+        tray_menu = QMenu(self)
+        show_action = tray_menu.addAction("Show")
+        hide_action = tray_menu.addAction("Hide")
+        tray_menu.addSeparator()
+        exit_action = tray_menu.addAction("Exit")
+
+        show_action.triggered.connect(self._restore_from_tray)
+        hide_action.triggered.connect(self._hide_to_tray)
+        exit_action.triggered.connect(self._exit_application_from_tray)
+
+        self.tray_icon.setContextMenu(tray_menu)
+        self.tray_icon.activated.connect(self._on_tray_icon_activated)
+        self.tray_icon.show()
+
+    def _hide_to_tray(self):
+        """Hide main window to system tray."""
+        if self.isVisible():
+            self.hide()
+        if self.tray_icon and not self._tray_message_shown:
+            self.tray_icon.showMessage(
+                APP_NAME,
+                "Application is still running in the system tray.",
+                QSystemTrayIcon.MessageIcon.Information,
+                2500,
+            )
+            self._tray_message_shown = True
+
+    def _restore_from_tray(self):
+        """Restore and focus main window from system tray."""
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def _exit_application_from_tray(self):
+        """Exit application fully from tray menu."""
+        self._is_exiting = True
+        self.close()
+
+    def _on_tray_icon_activated(self, reason):
+        """Toggle window on tray icon click."""
+        if reason in (
+            QSystemTrayIcon.ActivationReason.Trigger,
+            QSystemTrayIcon.ActivationReason.DoubleClick,
+        ):
+            if self.isVisible():
+                self._hide_to_tray()
+            else:
+                self._restore_from_tray()
     
     def setup_ui(self):
         """Setup the user interface"""
@@ -4444,11 +4511,18 @@ class MainWindow(QMainWindow):
     
     def closeEvent(self, event):
         """Handle window close"""
+        if self.tray_icon and self.tray_icon.isVisible() and (not self._is_exiting):
+            self._hide_to_tray()
+            event.ignore()
+            return
+
         if self._screen_recording_active:
             self._stop_screen_recording()
         self._screen_record_elapsed_timer.stop()
         self.keyboard_listener.stop()
         self.auto_clicker.stop()
+        if self.tray_icon:
+            self.tray_icon.hide()
         event.accept()
 
 
