@@ -1488,6 +1488,21 @@ class MainWindow(QMainWindow):
         if item is not None:
             self.script_tree.setCurrentItem(item)
 
+        is_if_item = False
+        if item is not None:
+            payload = item.data(0, Qt.ItemDataRole.UserRole)
+            if isinstance(payload, tuple) and len(payload) >= 3 and payload[0] == "action":
+                try:
+                    gi = int(payload[1])
+                    ai = int(payload[2])
+                    if 0 <= gi < len(self.script_groups):
+                        actions = self.script_groups[gi].get("actions", [])
+                        if 0 <= ai < len(actions):
+                            action = actions[ai].get("action")
+                            is_if_item = isinstance(action, ClickAction) and action.type == ClickType.IF
+                except Exception:
+                    is_if_item = False
+
         menu = QMenu(self)
         add_branch_action = menu.addAction("Add Branch")
         add_if_action = menu.addAction("Add IF")
@@ -1498,11 +1513,13 @@ class MainWindow(QMainWindow):
         qif_num_lte = quick_if_menu.addAction("OCR Number <= X -> Stop")
         qif_num_eq = quick_if_menu.addAction("OCR Number == X -> Stop")
         qif_text_contains = quick_if_menu.addAction("OCR Text contains X -> Stop")
+        edit_if_action = menu.addAction("Edit IF")
         rename_action = menu.addAction("Rename")
         delete_action = menu.addAction("Delete")
         menu.addSeparator()
         clear_all_action = menu.addAction("Clear All")
 
+        edit_if_action.setEnabled(is_if_item)
         rename_action.setEnabled(item is not None)
         delete_action.setEnabled(item is not None)
 
@@ -1530,6 +1547,9 @@ class MainWindow(QMainWindow):
             return
         if chosen == qif_text_contains:
             self.on_add_quick_if(item, "text", "contains")
+            return
+        if chosen == edit_if_action:
+            self.on_edit_if(item)
             return
         if chosen == rename_action:
             self.on_rename_selected()
@@ -1789,10 +1809,11 @@ class MainWindow(QMainWindow):
                 })
         return options
 
-    def _show_if_dialog(self, source_options: list[dict]) -> dict | None:
+    def _show_if_dialog(self, source_options: list[dict], initial_data: dict | None = None) -> dict | None:
         """Open dialog to configure IF/IF NOT rule."""
+        initial_data = initial_data or {}
         dlg = QDialog(self)
-        dlg.setWindowTitle("Add IF")
+        dlg.setWindowTitle("Edit IF" if initial_data else "Add IF")
         self._apply_always_on_top_to_dialog(dlg)
         layout = QVBoxLayout(dlg)
         form = QFormLayout()
@@ -1866,6 +1887,18 @@ class MainWindow(QMainWindow):
         cooldown_spin.setValue(500)
         form.addRow("Cooldown (ms):", cooldown_spin)
 
+        def _set_combo_by_data(combo: QComboBox, expected_value, fallback_index: int = 0, dict_key: str | None = None):
+            for i in range(combo.count()):
+                item_data = combo.itemData(i)
+                if dict_key and isinstance(item_data, dict):
+                    if item_data.get(dict_key) == expected_value:
+                        combo.setCurrentIndex(i)
+                        return
+                elif item_data == expected_value:
+                    combo.setCurrentIndex(i)
+                    return
+            combo.setCurrentIndex(fallback_index)
+
         def _sync_ocr_ops():
             ocr_op_combo.blockSignals(True)
             ocr_op_combo.clear()
@@ -1898,7 +1931,25 @@ class MainWindow(QMainWindow):
         ocr_type_combo.currentIndexChanged.connect(_sync_ocr_ops)
         condition_combo.currentIndexChanged.connect(_sync_condition_state)
         then_combo.currentIndexChanged.connect(_sync_then_state)
+
+        mode_combo.setCurrentIndex(1 if str(initial_data.get("if_mode", "if")).strip().lower() == "if_not" else 0)
+        _set_combo_by_data(source_combo, str(initial_data.get("source_action_id", "")), dict_key="id")
+        _set_combo_by_data(condition_combo, str(initial_data.get("if_condition_type", "image_visible")))
+        _set_combo_by_data(ocr_type_combo, str(initial_data.get("if_ocr_value_type", "number")))
         _sync_ocr_ops()
+        _set_combo_by_data(ocr_op_combo, str(initial_data.get("if_ocr_operator", "eq")))
+        ocr_value_edit.setText(str(initial_data.get("if_ocr_compare_value", "")))
+        _set_combo_by_data(then_combo, str(initial_data.get("then_action", "run_branch")))
+        _set_combo_by_data(target_combo, initial_data.get("target_branch_index"))
+        _set_combo_by_data(target_action_combo, str(initial_data.get("target_action_id", "")), dict_key="id")
+        try:
+            priority_spin.setValue(max(0, int(initial_data.get("priority_level", 0) or 0)))
+        except Exception:
+            priority_spin.setValue(0)
+        try:
+            cooldown_spin.setValue(max(0, int(initial_data.get("if_cooldown_ms", 500) or 0)))
+        except Exception:
+            cooldown_spin.setValue(500)
         _sync_condition_state()
         _sync_then_state()
 
@@ -1959,6 +2010,68 @@ class MainWindow(QMainWindow):
             "priority_level": int(priority_spin.value()),
             "if_cooldown_ms": int(cooldown_spin.value()),
         }
+
+    def on_edit_if(self, context_item: QTreeWidgetItem | None = None):
+        """Edit an existing IF row and update it in place."""
+        if self.auto_clicker.is_running:
+            self.statusBar.showMessage("Cannot edit IF while running")
+            return
+
+        item = context_item or self.script_tree.currentItem()
+        if item is None:
+            self.statusBar.showMessage("Select an IF row to edit")
+            return
+
+        payload = item.data(0, Qt.ItemDataRole.UserRole)
+        if not (isinstance(payload, tuple) and len(payload) >= 3 and payload[0] == "action"):
+            self.statusBar.showMessage("Select an IF row to edit")
+            return
+
+        group_index = int(payload[1])
+        action_index = int(payload[2])
+        if not (0 <= group_index < len(self.script_groups)):
+            return
+        actions = self.script_groups[group_index].get("actions", [])
+        if not (0 <= action_index < len(actions)):
+            return
+
+        entry = actions[action_index]
+        action = entry.get("action")
+        if not isinstance(action, ClickAction) or action.type != ClickType.IF:
+            self.statusBar.showMessage("Selected row is not an IF")
+            return
+
+        source_options = self._collect_image_action_sources()
+        if not source_options:
+            QMessageBox.information(
+                self,
+                "Edit IF",
+                "No image-related source action found.\nPlease add IMAGE / IMAGE DIRECT / IMAGE RECOGNITION first."
+            )
+            return
+
+        if_data = self._show_if_dialog(source_options, dict(action.data))
+        if not if_data:
+            return
+
+        action.data.update({
+            "if_mode": str(if_data.get("if_mode", "if")),
+            "if_condition_type": str(if_data.get("if_condition_type", "image_visible")),
+            "if_ocr_value_type": str(if_data.get("if_ocr_value_type", "number")),
+            "if_ocr_operator": str(if_data.get("if_ocr_operator", "eq")),
+            "if_ocr_compare_value": str(if_data.get("if_ocr_compare_value", "")),
+            "source_action_id": str(if_data.get("source_action_id", "")),
+            "source_action_name": str(if_data.get("source_action_name", "")),
+            "then_action": str(if_data.get("then_action", "run_branch")),
+            "target_branch_index": if_data.get("target_branch_index"),
+            "target_action_id": if_data.get("target_action_id"),
+            "target_action_name": if_data.get("target_action_name"),
+            "priority_level": int(if_data.get("priority_level", 0) or 0),
+            "if_cooldown_ms": int(if_data.get("if_cooldown_ms", 500) or 0),
+            "delay_ms": 0,
+        })
+        self.update_table()
+        self.statusBar.showMessage("IF updated")
     
     def on_rename_selected(self):
         """Rename currently selected branch/action."""
@@ -2101,10 +2214,24 @@ class MainWindow(QMainWindow):
         
     def on_script_tree_item_double_clicked(self, item: QTreeWidgetItem, column: int):
         """Rename branch/action when double-clicking the name column."""
-        if column != 0 or item is None:
+        if item is None:
             return
         payload = item.data(0, Qt.ItemDataRole.UserRole)
         if not payload:
+            return
+
+        if payload[0] == "action":
+            group_index = int(payload[1])
+            action_index = int(payload[2])
+            if 0 <= group_index < len(self.script_groups):
+                actions = self.script_groups[group_index].get("actions", [])
+                if 0 <= action_index < len(actions):
+                    action = actions[action_index].get("action")
+                    if isinstance(action, ClickAction) and action.type == ClickType.IF:
+                        self.on_edit_if(item)
+                        return
+
+        if column != 0:
             return
         
         if payload[0] == "group":
