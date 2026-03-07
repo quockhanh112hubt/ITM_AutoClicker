@@ -1,6 +1,6 @@
 {
   "click_delay_ms": 400,
-  "priority_cooldown_ms": 800,
+  "priority_cooldown_ms": 100,
   "image_confidence": 0.8,
   "auto_save": true,
   "last_script": null,

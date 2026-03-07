@@ -2965,7 +2965,12 @@ class MainWindow(QMainWindow):
                 if not entry.get("id"):
                     entry["id"] = uuid.uuid4().hex
 
-        def add_tree_action_node(item: QTreeWidgetItem, parent_runtime_index: int | None, ancestors_enabled: bool):
+        def add_tree_action_node(
+            item: QTreeWidgetItem,
+            parent_runtime_index: int | None,
+            normal_ancestors_enabled: bool,
+            invokable_ancestors_enabled: bool
+        ):
             payload = item.data(0, Qt.ItemDataRole.UserRole)
             if not (isinstance(payload, tuple) and len(payload) >= 3 and payload[0] == "action"):
                 return
@@ -2980,8 +2985,6 @@ class MainWindow(QMainWindow):
 
             entry = actions[action_index]
             enabled_here = item.checkState(0) != Qt.CheckState.Unchecked
-            if not ancestors_enabled or not enabled_here:
-                return
 
             action = entry.get("action")
             if not isinstance(action, ClickAction):
@@ -2993,6 +2996,8 @@ class MainWindow(QMainWindow):
                 runtime_action.data["last_recognized_value"] = ""
                 runtime_action.data["last_recognition_status"] = ""
                 runtime_action.data["last_recognized_at"] = 0.0
+            runtime_action.data["__normal_enabled"] = bool(normal_ancestors_enabled and enabled_here)
+            runtime_action.data["__invokable_enabled"] = bool(invokable_ancestors_enabled and enabled_here)
             if parent_runtime_index is not None:
                 runtime_action.data["__parent_runtime_index"] = int(parent_runtime_index)
             runtime_action.data["__branch_index"] = int(group_index)
@@ -3011,18 +3016,22 @@ class MainWindow(QMainWindow):
                 action_id_to_runtime_index[action_id] = int(runtime_index)
 
             for i in range(item.childCount()):
-                add_tree_action_node(item.child(i), runtime_index, True)
+                add_tree_action_node(
+                    item.child(i),
+                    runtime_index,
+                    bool(normal_ancestors_enabled and enabled_here),
+                    bool(invokable_ancestors_enabled and enabled_here),
+                )
 
         for gi in range(self.script_tree.topLevelItemCount()):
             group_item = self.script_tree.topLevelItem(gi)
             if group_item is None:
                 continue
-            if group_item.checkState(0) == Qt.CheckState.Unchecked:
-                continue
+            group_enabled = group_item.checkState(0) != Qt.CheckState.Unchecked
 
             # Traverse visible order in tree for deterministic runtime sequence.
             for i in range(group_item.childCount()):
-                add_tree_action_node(group_item.child(i), None, True)
+                add_tree_action_node(group_item.child(i), None, bool(group_enabled), True)
 
         # Resolve IF runtime references (source image path and branch runtime indices).
         runtime_actions = script.get_actions()
@@ -3067,7 +3076,17 @@ class MainWindow(QMainWindow):
             except Exception:
                 target_bi_int = None
             if target_bi_int is not None:
-                indices = [int(x) for x in branch_runtime_indices.get(target_bi_int, []) if int(x) != int(r_idx)]
+                target_group_enabled = bool(self.script_groups[target_bi_int].get("enabled", True)) if 0 <= target_bi_int < len(self.script_groups) else True
+                act.data["__run_branch_group_enabled"] = target_group_enabled
+                indices = [
+                    int(x)
+                    for x in branch_runtime_indices.get(target_bi_int, [])
+                    if int(x) != int(r_idx)
+                    and (
+                        (not target_group_enabled)
+                        or bool(runtime_actions[int(x)].data.get("__invokable_enabled", True))
+                    )
+                ]
                 act.data["__run_branch_runtime_indices"] = indices
             target_action_id = str(act.data.get("target_action_id", "") or "")
             if target_action_id:

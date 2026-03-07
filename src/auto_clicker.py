@@ -94,6 +94,8 @@ class AutoClicker:
         self._next_action_index = 0
         self._cycle_executed_by_index: Dict[int, bool] = {}
         self._pending_runtime_indices: list[int] = []
+        self._pending_runtime_forced_counts: Dict[int, int] = {}
+        self._recognition_last_scan_at: Dict[int, float] = {}
         self._if_last_trigger_at: Dict[int, float] = {}
         self._if_trigger_timestamps: list[float] = []
         self._if_trigger_limit = 5
@@ -215,6 +217,8 @@ class AutoClicker:
         self._next_action_index = 0
         self._cycle_executed_by_index = {}
         self._pending_runtime_indices = []
+        self._pending_runtime_forced_counts = {}
+        self._recognition_last_scan_at = {}
         self._if_last_trigger_at = {}
         self._if_trigger_timestamps = []
         self._run_started_at = time.time()
@@ -228,6 +232,7 @@ class AutoClicker:
         try:
             while self.is_running:
                 if not self.is_paused and self.current_script:
+                    self._poll_image_recognition_actions()
                     self._execute_once()
                 else:
                     time.sleep(0.02)
@@ -247,6 +252,30 @@ class AutoClicker:
             remaining = end_at - time.time()
             time.sleep(min(0.02, max(0.0, remaining)))
         return self.is_running and (not self.is_paused)
+
+    def _poll_image_recognition_actions(self) -> None:
+        """Continuously refresh IMAGE_RECOGNITION actions independent of sequence order."""
+        actions = self.current_script.get_actions() if self.current_script else []
+        if not actions:
+            return
+        now = time.time()
+        for idx, action in enumerate(actions):
+            if action.type != ClickType.IMAGE_RECOGNITION:
+                continue
+            if not bool(action.data.get("__normal_enabled", True)):
+                continue
+            interval_ms = max(100, int(action.data.get("delay_ms", self.delay_ms) or self.delay_ms or 0))
+            last_at = float(self._recognition_last_scan_at.get(int(idx), 0.0))
+            if interval_ms > 0 and (now - last_at) * 1000.0 < interval_ms:
+                continue
+            self._recognition_last_scan_at[int(idx)] = now
+            try:
+                changed, recognized = self._execute_image_recognition(action, idx, from_polling=True)
+                if changed:
+                    self._action_execution_totals[idx] = int(self._action_execution_totals.get(idx, 0)) + 1
+                    self._notify_action_executed(idx)
+            except Exception:
+                continue
     
     def _execute_once(self) -> None:
         """Execute one action step and keep current index for pause/resume."""
@@ -254,7 +283,7 @@ class AutoClicker:
         if not actions:
             time.sleep(0.02)
             return
-        if (not self.is_paused) and self.is_running:
+        if (not self.is_paused) and self.is_running and (not self._pending_runtime_indices):
             self._process_if_triggers(actions)
             if (not self.is_running) or self.is_paused:
                 return
@@ -263,10 +292,18 @@ class AutoClicker:
             self._cycle_executed_by_index.clear()
 
         from_pending = False
+        force_pending = False
         will_wrap_cycle = False
         if self._pending_runtime_indices:
             action_index = int(self._pending_runtime_indices.pop(0))
             from_pending = True
+            force_count = int(self._pending_runtime_forced_counts.get(int(action_index), 0))
+            if force_count > 0:
+                force_pending = True
+                if force_count <= 1:
+                    self._pending_runtime_forced_counts.pop(int(action_index), None)
+                else:
+                    self._pending_runtime_forced_counts[int(action_index)] = force_count - 1
             if action_index < 0 or action_index >= len(actions):
                 return
         else:
@@ -286,13 +323,23 @@ class AutoClicker:
             return
 
         try:
+            if from_pending:
+                if (not force_pending) and (not bool(action.data.get("__invokable_enabled", True))):
+                    self._cycle_executed_by_index[action_index] = False
+                    return
+            else:
+                if not bool(action.data.get("__normal_enabled", True)):
+                    self._cycle_executed_by_index[action_index] = False
+                    return
+
             if not self._can_execute_by_limit(action_index, action):
                 self._cycle_executed_by_index[action_index] = False
                 if not self._sleep_interruptible(self._get_action_delay_ms(action) / 1000.0):
                     return
                 if self.is_paused or (not self.is_running):
                     return
-                self._execute_priority_actions()
+                if not from_pending:
+                    self._execute_priority_actions()
                 return
 
             parent_runtime_index = action.data.get("__parent_runtime_index")
@@ -313,7 +360,8 @@ class AutoClicker:
             elif action.type == ClickType.IMAGE_DIRECT:
                 executed = self._execute_image_direct_click(action)
             elif action.type == ClickType.IMAGE_RECOGNITION:
-                executed = self._execute_image_recognition(action, action_index)
+                changed, recognized = self._execute_image_recognition(action, action_index, from_polling=False)
+                executed = bool(recognized)
             elif action.type == ClickType.IF:
                 # IF rows are processed by _process_if_triggers with priority/cooldown.
                 executed = False
@@ -335,7 +383,8 @@ class AutoClicker:
                 return
             if self.is_paused or (not self.is_running):
                 return
-            self._execute_priority_actions()
+            if not from_pending:
+                self._execute_priority_actions()
         except Exception as e:
             self._cycle_executed_by_index[action_index] = False
             if will_wrap_cycle and (not from_pending):
@@ -349,6 +398,8 @@ class AutoClicker:
         candidates = []
         for idx, action in enumerate(actions):
             if action.type != ClickType.IF:
+                continue
+            if not bool(action.data.get("__normal_enabled", True)):
                 continue
             if not self._can_execute_by_limit(idx, action):
                 continue
@@ -420,6 +471,9 @@ class AutoClicker:
                 if 0 <= ri < len(actions):
                     queue.append(ri)
             if queue:
+                if not bool(action.data.get("__run_branch_group_enabled", True)):
+                    for ri in queue:
+                        self._pending_runtime_forced_counts[int(ri)] = int(self._pending_runtime_forced_counts.get(int(ri), 0)) + 1
                 # Run target branch immediately, then continue previous flow.
                 self._pending_runtime_indices = queue + list(self._pending_runtime_indices)
                 self._notify_status(f"IF triggered: run branch now ({len(queue)} step(s))")
@@ -1060,19 +1114,26 @@ class AutoClicker:
         except Exception as e:
             return False, f"OCR failed: {e}"
 
-    def _execute_image_recognition(self, action: ClickAction, action_index: int) -> bool:
-        """Recognize text from matched image region and push value to row detail."""
+    def _execute_image_recognition(self, action: ClickAction, action_index: int, from_polling: bool = False) -> Tuple[bool, bool]:
+        """Recognize text from matched image region and push value to row detail.
+
+        Returns (changed, recognized_ok).
+        """
         image_path = action.data.get("image_path", "")
         target_hwnd = action.data.get("target_hwnd")
         target_title = action.data.get("target_title", "")
+        prev_value = str(action.data.get("last_recognized_value", "") or "")
+        prev_status = str(action.data.get("last_recognition_status", "") or "")
 
         if not image_path or not os.path.exists(image_path):
             msg = f"Image file not found: {image_path}"
             action.data["last_recognized_value"] = ""
             action.data["last_recognition_status"] = msg
-            self._notify_action_detail_changed(action_index, f"ERROR::{msg}")
-            self._notify_status(msg)
-            return False
+            changed = (prev_value != "") or (prev_status != msg)
+            if changed:
+                self._notify_action_detail_changed(action_index, f"ERROR::{msg}")
+                self._notify_status(msg)
+            return changed, False
 
         if target_hwnd is not None:
             try:
@@ -1083,7 +1144,7 @@ class AutoClicker:
             ok, error = self._validate_target_window(target_hwnd)
             if not ok:
                 self._stop_due_to_target_error(error, target_title)
-                return False
+                return False, False
 
         region = self._match_template_region(str(image_path), target_hwnd)
         if region is None:
@@ -1100,17 +1161,21 @@ class AutoClicker:
                 msg = f"Image not found: {os.path.basename(image_path)}"
                 action.data["last_recognized_value"] = ""
                 action.data["last_recognition_status"] = msg
-                self._notify_action_detail_changed(action_index, f"ERROR::{msg}")
-                self._notify_status(msg)
-                return False
+                changed = (prev_value != "") or (prev_status != msg)
+                if changed:
+                    self._notify_action_detail_changed(action_index, f"ERROR::{msg}")
+                    self._notify_status(msg)
+                return changed, False
 
         ok, text_or_reason = self._ocr_region_text(*region)
         if not ok:
             action.data["last_recognized_value"] = ""
             action.data["last_recognition_status"] = text_or_reason
-            self._notify_action_detail_changed(action_index, f"ERROR::{text_or_reason}")
-            self._notify_status(text_or_reason)
-            return False
+            changed = (prev_value != "") or (prev_status != str(text_or_reason))
+            if changed:
+                self._notify_action_detail_changed(action_index, f"ERROR::{text_or_reason}")
+                self._notify_status(text_or_reason)
+            return changed, False
 
         recognized = str(text_or_reason or "")
         action.data["last_recognized_value"] = recognized
@@ -1121,9 +1186,11 @@ class AutoClicker:
             f"OCR: '{recognized}'" if recognized else "OCR: (empty)"
         )
         msg = f"{msg} @ ({x1}, {y1}, {max(0, x2 - x1)}x{max(0, y2 - y1)})"
-        self._notify_action_detail_changed(action_index, f"VALUE::{recognized}")
-        self._notify_status(msg)
-        return True
+        changed = (prev_value != recognized) or (prev_status != "ok")
+        if changed:
+            self._notify_action_detail_changed(action_index, f"VALUE::{recognized}")
+            self._notify_status(msg)
+        return changed, True
     
     def _validate_target_window(self, hwnd: int) -> Tuple[bool, str]:
         """Validate target window state before background click."""
