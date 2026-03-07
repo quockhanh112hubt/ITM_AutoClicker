@@ -460,26 +460,34 @@ class MainWindow(QMainWindow):
         exe_name = os.path.basename(current_exe)
         backup_path = os.path.join(app_dir, f"{exe_name}.bak")
         updater_bat = os.path.join(tempfile.gettempdir(), "itm_autoclicker_update.bat")
-        quoted_current = f'"{current_exe}"'
-        quoted_download = f'"{downloaded_exe_path}"'
-        quoted_backup = f'"{backup_path}"'
-        quoted_updater = f'"{updater_bat}"'
+        current_pid = os.getpid()
 
         script = "\n".join([
             "@echo off",
             "setlocal",
-            f"set TARGET={quoted_current}",
-            f"set DOWNLOAD={quoted_download}",
-            f"set BACKUP={quoted_backup}",
-            ":waitloop",
+            f'set "TARGET={current_exe}"',
+            f'set "DOWNLOAD={downloaded_exe_path}"',
+            f'set "BACKUP={backup_path}"',
+            f'set "APPDIR={app_dir}"',
+            f'set "WAITPID={current_pid}"',
+            ":wait_for_exit",
             "timeout /t 1 /nobreak >nul",
-            "tasklist /FI \"IMAGENAME eq " + exe_name + "\" | find /I \"" + exe_name + "\" >nul",
-            "if not errorlevel 1 goto waitloop",
-            "if exist %BACKUP% del /f /q %BACKUP% >nul 2>nul",
-            "if exist %TARGET% move /y %TARGET% %BACKUP% >nul 2>nul",
-            "move /y %DOWNLOAD% %TARGET% >nul",
-            "start \"\" %TARGET%",
-            f"del /f /q {quoted_updater} >nul 2>nul",
+            "tasklist /FI \"PID eq %WAITPID%\" | find \"%WAITPID%\" >nul",
+            "if not errorlevel 1 goto wait_for_exit",
+            "for /L %%I in (1,1,10) do (",
+            "  if exist \"%BACKUP%\" del /f /q \"%BACKUP%\" >nul 2>nul",
+            "  if exist \"%TARGET%\" move /y \"%TARGET%\" \"%BACKUP%\" >nul 2>nul",
+            "  copy /y \"%DOWNLOAD%\" \"%TARGET%\" >nul",
+            "  if exist \"%TARGET%\" goto launch_new",
+            "  timeout /t 1 /nobreak >nul",
+            ")",
+            "goto cleanup",
+            ":launch_new",
+            "timeout /t 2 /nobreak >nul",
+            "start \"\" /D \"%APPDIR%\" \"%TARGET%\"",
+            ":cleanup",
+            "if exist \"%DOWNLOAD%\" del /f /q \"%DOWNLOAD%\" >nul 2>nul",
+            "del /f /q \"%~f0\" >nul 2>nul",
             "endlocal",
         ])
         with open(updater_bat, "w", encoding="utf-8", newline="\r\n") as handle:
