@@ -10,6 +10,7 @@ import webbrowser
 import tempfile
 import subprocess
 import urllib.request
+import textwrap
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTabWidget,
@@ -508,43 +509,105 @@ class MainWindow(QMainWindow):
 
         app_dir = os.path.dirname(current_exe)
         exe_name = os.path.basename(current_exe)
+        process_name = os.path.splitext(exe_name)[0]
         backup_path = os.path.join(app_dir, f"{exe_name}.bak")
-        updater_bat = os.path.join(tempfile.gettempdir(), "itm_autoclicker_update.bat")
+        updater_ps1 = os.path.join(tempfile.gettempdir(), "itm_autoclicker_update.ps1")
         current_pid = os.getpid()
 
-        script = "\n".join([
-            "@echo off",
-            "setlocal",
-            f'set "TARGET={current_exe}"',
-            f'set "DOWNLOAD={downloaded_exe_path}"',
-            f'set "BACKUP={backup_path}"',
-            f'set "APPDIR={app_dir}"',
-            f'set "WAITPID={current_pid}"',
-            ":wait_for_exit",
-            "timeout /t 1 /nobreak >nul",
-            "tasklist /FI \"PID eq %WAITPID%\" | find \"%WAITPID%\" >nul",
-            "if not errorlevel 1 goto wait_for_exit",
-            "for /L %%I in (1,1,10) do (",
-            "  if exist \"%BACKUP%\" del /f /q \"%BACKUP%\" >nul 2>nul",
-            "  if exist \"%TARGET%\" move /y \"%TARGET%\" \"%BACKUP%\" >nul 2>nul",
-            "  copy /y \"%DOWNLOAD%\" \"%TARGET%\" >nul",
-            "  if exist \"%TARGET%\" goto launch_new",
-            "  timeout /t 1 /nobreak >nul",
-            ")",
-            "goto cleanup",
-            ":launch_new",
-            "timeout /t 2 /nobreak >nul",
-            "start \"\" /D \"%APPDIR%\" \"%TARGET%\"",
-            ":cleanup",
-            "if exist \"%DOWNLOAD%\" del /f /q \"%DOWNLOAD%\" >nul 2>nul",
-            "del /f /q \"%~f0\" >nul 2>nul",
-            "endlocal",
-        ])
-        with open(updater_bat, "w", encoding="utf-8", newline="\r\n") as handle:
+        def _ps_quote(value: str) -> str:
+            return "'" + str(value).replace("'", "''") + "'"
+
+        script = textwrap.dedent(f"""
+        $ErrorActionPreference = 'SilentlyContinue'
+        $target = {_ps_quote(current_exe)}
+        $download = {_ps_quote(downloaded_exe_path)}
+        $backup = {_ps_quote(backup_path)}
+        $appDir = {_ps_quote(app_dir)}
+        $processName = {_ps_quote(process_name)}
+        $waitPid = {int(current_pid)}
+        $logPath = Join-Path $env:TEMP 'itm_autoclicker_update.log'
+
+        function Write-Log([string]$message) {{
+            Add-Content -Path $logPath -Value ("[{0}] {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $message)
+        }}
+
+        Write-Log "Updater started for $target"
+
+        while (Get-Process -Id $waitPid -ErrorAction SilentlyContinue) {{
+            Start-Sleep -Milliseconds 500
+        }}
+
+        Start-Sleep -Seconds 2
+
+        $replaced = $false
+        for ($i = 0; $i -lt 10; $i++) {{
+            try {{
+                if (Test-Path $backup) {{ Remove-Item $backup -Force }}
+                if (Test-Path $target) {{ Move-Item -Path $target -Destination $backup -Force }}
+                Copy-Item -Path $download -Destination $target -Force
+                if (Test-Path $target) {{
+                    $replaced = $true
+                    Write-Log "Replacement succeeded on attempt $($i + 1)"
+                    break
+                }}
+            }} catch {{
+                Write-Log "Replacement failed on attempt $($i + 1): $($_.Exception.Message)"
+            }}
+            Start-Sleep -Seconds 1
+        }}
+
+        if (-not $replaced) {{
+            Write-Log "Replacement failed, updater exiting"
+            exit 1
+        }}
+
+        $started = $false
+        for ($i = 0; $i -lt 5; $i++) {{
+            try {{
+                Start-Process -FilePath $target -WorkingDirectory $appDir
+                Write-Log "Launch requested on attempt $($i + 1)"
+                Start-Sleep -Seconds 4
+                if (Get-Process -Name $processName -ErrorAction SilentlyContinue) {{
+                    $started = $true
+                    Write-Log "New process detected"
+                    break
+                }}
+            }} catch {{
+                Write-Log "Launch failed on attempt $($i + 1): $($_.Exception.Message)"
+            }}
+            Start-Sleep -Seconds 2
+        }}
+
+        if (-not $started -and (Test-Path $backup)) {{
+            Write-Log "Launch failed, restoring backup"
+            try {{
+                if (Test-Path $target) {{ Remove-Item $target -Force }}
+                Move-Item -Path $backup -Destination $target -Force
+                Start-Sleep -Seconds 2
+                Start-Process -FilePath $target -WorkingDirectory $appDir
+                Write-Log "Backup restored and launched"
+            }} catch {{
+                Write-Log "Backup restore failed: $($_.Exception.Message)"
+            }}
+        }} else {{
+            if (Test-Path $download) {{ Remove-Item $download -Force }}
+        }}
+
+        Start-Sleep -Seconds 1
+        Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force
+        """).strip()
+        with open(updater_ps1, "w", encoding="utf-8", newline="\r\n") as handle:
             handle.write(script)
 
         subprocess.Popen(
-            ["cmd.exe", "/c", updater_bat],
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                updater_ps1,
+            ],
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         latest = info.latest_version if isinstance(info, UpdateInfo) else ""
