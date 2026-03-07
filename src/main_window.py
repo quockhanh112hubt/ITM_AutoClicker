@@ -691,6 +691,7 @@ class MainWindow(QMainWindow):
         target_geo_layout.addWidget(self.btn_fix_target_rect)
         target_geo_layout.addStretch()
         layout.addLayout(target_geo_layout)
+        self._apply_top_control_button_style()
         
         # Title
         title = QLabel("Click Script List")
@@ -3101,6 +3102,65 @@ class MainWindow(QMainWindow):
         """
         for button in self._action_tool_buttons:
             button.setStyleSheet(style)
+
+    def _apply_top_control_button_style(self):
+        """Apply a more polished style to top utility buttons."""
+        base = (
+            "QPushButton {"
+            " min-height: 28px;"
+            " padding: 4px 12px;"
+            " border-radius: 7px;"
+            " border: 1px solid #97a6b4;"
+            " border-bottom: 2px solid #6f7d8a;"
+            " background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
+            "     stop:0 #ffffff, stop:1 #e4e9ee);"
+            " color: #22303d;"
+            " font-weight: 600;"
+            "}"
+            "QPushButton:hover { background: #f7fafc; }"
+            "QPushButton:pressed { border-bottom: 1px solid #6f7d8a; padding-top: 6px; padding-bottom: 2px; }"
+        )
+        accent = (
+            "QPushButton {"
+            " min-height: 30px;"
+            " padding: 4px 14px;"
+            " border-radius: 8px;"
+            " border: 1px solid #3b73a7;"
+            " border-bottom: 3px solid #2d5c88;"
+            " background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
+            "     stop:0 #f2f9ff, stop:1 #cfe6fb);"
+            " color: #16324c;"
+            " font-weight: 700;"
+            "}"
+            "QPushButton:hover { background: #e7f3ff; }"
+            "QPushButton:pressed { border-bottom: 1px solid #2d5c88; padding-top: 6px; padding-bottom: 2px; }"
+        )
+        utility = (
+            "QPushButton {"
+            " min-height: 26px;"
+            " padding: 3px 12px;"
+            " border-radius: 7px;"
+            " border: 1px solid #9ca8b5;"
+            " border-bottom: 2px solid #77828f;"
+            " background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
+            "     stop:0 #fafbfd, stop:1 #dde4eb);"
+            " color: #243240;"
+            " font-weight: 600;"
+            "}"
+            "QPushButton:hover { background: #f3f7fa; }"
+            "QPushButton:pressed { border-bottom: 1px solid #77828f; padding-top: 5px; padding-bottom: 1px; }"
+        )
+
+        if getattr(self, "btn_load_top", None):
+            self.btn_load_top.setStyleSheet(base)
+        if getattr(self, "btn_save_top", None):
+            self.btn_save_top.setStyleSheet(base)
+        if getattr(self, "btn_select_target", None):
+            self.btn_select_target.setStyleSheet(accent)
+        if getattr(self, "btn_refresh_target_rect", None):
+            self.btn_refresh_target_rect.setStyleSheet(utility)
+        if getattr(self, "btn_fix_target_rect", None):
+            self.btn_fix_target_rect.setStyleSheet(utility)
 
     def _resource_path(self, relative_path: str) -> str:
         """Resolve resource path for dev and PyInstaller."""
