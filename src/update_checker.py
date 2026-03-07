@@ -18,6 +18,8 @@ class UpdateInfo:
     latest_version: str
     release_url: str
     release_name: str
+    asset_name: str = ""
+    asset_download_url: str = ""
     error: str = ""
     no_release: bool = False
 
@@ -70,6 +72,8 @@ def check_github_update(
                 latest_version="",
                 release_url=GITHUB_RELEASES_URL,
                 release_name="",
+                asset_name="",
+                asset_download_url="",
                 error="",
                 no_release=True,
             )
@@ -79,6 +83,8 @@ def check_github_update(
             latest_version="",
             release_url=GITHUB_RELEASES_URL,
             release_name="",
+            asset_name="",
+            asset_download_url="",
             error=f"HTTP {exc.code}",
             no_release=False,
         )
@@ -89,6 +95,8 @@ def check_github_update(
             latest_version="",
             release_url=GITHUB_RELEASES_URL,
             release_name="",
+            asset_name="",
+            asset_download_url="",
             error=str(exc),
             no_release=False,
         )
@@ -97,6 +105,15 @@ def check_github_update(
     latest_version = _normalize_version(latest_tag)
     release_url = str(payload.get("html_url") or GITHUB_RELEASES_URL)
     release_name = str(payload.get("name") or latest_tag or latest_version)
+    asset_name = ""
+    asset_download_url = ""
+    for asset in payload.get("assets", []) or []:
+        name = str(asset.get("name") or "")
+        url = str(asset.get("browser_download_url") or "")
+        if name.lower().endswith(".exe") and url:
+            asset_name = name
+            asset_download_url = url
+            break
 
     return UpdateInfo(
         update_available=is_newer_version(latest_version, current_version),
@@ -104,6 +121,8 @@ def check_github_update(
         latest_version=latest_version,
         release_url=release_url,
         release_name=release_name,
+        asset_name=asset_name,
+        asset_download_url=asset_download_url,
         error="",
         no_release=False,
     )

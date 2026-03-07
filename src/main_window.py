@@ -7,6 +7,9 @@ import json
 import uuid
 import threading
 import webbrowser
+import tempfile
+import subprocess
+import urllib.request
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTabWidget,
@@ -41,6 +44,7 @@ class MainWindow(QMainWindow):
     action_detail_changed_signal = pyqtSignal(int, str)
     status_changed_signal = pyqtSignal(str)
     update_check_completed_signal = pyqtSignal(object)
+    update_download_completed_signal = pyqtSignal(object)
     
     def __init__(self):
         super().__init__()
@@ -114,10 +118,12 @@ class MainWindow(QMainWindow):
         self.action_detail_changed_signal.connect(self._on_action_detail_changed_main_thread)
         self.status_changed_signal.connect(self.on_status_changed)
         self.update_check_completed_signal.connect(self._on_update_check_completed_main_thread)
+        self.update_download_completed_signal.connect(self._on_update_download_completed_main_thread)
         self._ensure_default_group()
         self._always_on_top_enabled = bool(self.config.get("always_on_top", False))
         self._about_tab_index: int | None = None
         self._update_check_in_progress = False
+        self._update_download_in_progress = False
         self._update_available = False
         self._update_info: UpdateInfo | None = None
         self.lbl_about_update_status: QLabel | None = None
@@ -289,7 +295,7 @@ class MainWindow(QMainWindow):
                 )
 
     def _show_update_available_dialog(self, info: UpdateInfo):
-        """Show manual update result dialog with option to open releases page."""
+        """Show manual update result dialog with option to download update."""
         box = QMessageBox(self)
         box.setWindowTitle("Update Available")
         box.setIcon(QMessageBox.Icon.Information)
@@ -300,11 +306,11 @@ class MainWindow(QMainWindow):
         )
         if info.release_name:
             box.setInformativeText(f"Release: {info.release_name}")
-        open_button = box.addButton("Open Releases", QMessageBox.ButtonRole.AcceptRole)
+        download_button = box.addButton("Download Update", QMessageBox.ButtonRole.AcceptRole)
         box.addButton(QMessageBox.StandardButton.Close)
         box.exec()
-        if box.clickedButton() is open_button:
-            self.on_open_releases_page()
+        if box.clickedButton() is download_button:
+            self.start_download_update()
 
     def _refresh_about_update_ui(self):
         """Refresh About tab labels/button text and badge state."""
@@ -340,10 +346,12 @@ class MainWindow(QMainWindow):
             button_text = "Check for Update"
             if self._update_check_in_progress:
                 button_text = "Checking..."
+            elif self._update_download_in_progress:
+                button_text = "Downloading..."
             elif self._update_available:
                 button_text = "Check for Update (1)"
             self.btn_check_update.setText(button_text)
-            self.btn_check_update.setEnabled(not self._update_check_in_progress)
+            self.btn_check_update.setEnabled((not self._update_check_in_progress) and (not self._update_download_in_progress))
 
         if self.btn_open_releases:
             self.btn_open_releases.setEnabled(True)
@@ -362,6 +370,128 @@ class MainWindow(QMainWindow):
             self.statusBar.showMessage("Opened GitHub Releases page")
         except Exception as e:
             QMessageBox.warning(self, "Open Releases", f"Unable to open browser:\n{e}")
+
+    def start_download_update(self):
+        """Download latest release exe and replace current executable."""
+        if self._update_download_in_progress:
+            self.statusBar.showMessage("Update download already running")
+            return
+        info = self._update_info
+        if not isinstance(info, UpdateInfo) or not info.update_available:
+            QMessageBox.information(self, "Download Update", "No newer version is currently available.")
+            return
+        if not info.asset_download_url:
+            QMessageBox.warning(
+                self,
+                "Download Update",
+                "No EXE asset was found in the latest GitHub Release.\nPlease attach the build executable to the release first."
+            )
+            return
+        if not getattr(sys, "frozen", False):
+            QMessageBox.information(
+                self,
+                "Download Update",
+                "Self-update is only supported when running the packaged EXE.\nCurrent session is running from source."
+            )
+            return
+
+        self._update_download_in_progress = True
+        self._refresh_about_update_ui()
+        self.statusBar.showMessage(f"Downloading update {info.latest_version}...")
+        worker = threading.Thread(target=self._download_update_worker, args=(info,), daemon=True)
+        worker.start()
+
+    def _download_update_worker(self, info: UpdateInfo):
+        """Download update asset into temp file."""
+        try:
+            request = urllib.request.Request(
+                info.asset_download_url,
+                headers={"User-Agent": "ITM-AutoClicker-Updater"},
+            )
+            with urllib.request.urlopen(request, timeout=30) as response:
+                fd, temp_path = tempfile.mkstemp(suffix=".exe", prefix="itm_update_")
+                try:
+                    with os.fdopen(fd, "wb") as handle:
+                        while True:
+                            chunk = response.read(1024 * 256)
+                            if not chunk:
+                                break
+                            handle.write(chunk)
+                except Exception:
+                    try:
+                        os.close(fd)
+                    except Exception:
+                        pass
+                    raise
+            self.update_download_completed_signal.emit({"ok": True, "info": info, "temp_path": temp_path})
+        except Exception as exc:
+            self.update_download_completed_signal.emit({"ok": False, "info": info, "error": str(exc)})
+
+    def _on_update_download_completed_main_thread(self, payload: object):
+        """Handle downloaded update on UI thread and launch updater."""
+        self._update_download_in_progress = False
+        self._refresh_about_update_ui()
+        data = payload if isinstance(payload, dict) else {}
+        ok = bool(data.get("ok", False))
+        info = data.get("info")
+        if not ok:
+            error = str(data.get("error", "Unknown error"))
+            self.statusBar.showMessage(f"Update download failed: {error}")
+            QMessageBox.warning(self, "Download Update", f"Unable to download update.\n\nReason: {error}")
+            return
+        if not isinstance(info, UpdateInfo):
+            info = self._update_info
+        temp_path = str(data.get("temp_path") or "")
+        try:
+            self._launch_self_update(temp_path, info)
+        except Exception as exc:
+            self.statusBar.showMessage(f"Update install failed: {exc}")
+            QMessageBox.warning(self, "Download Update", f"Unable to install update.\n\nReason: {exc}")
+
+    def _launch_self_update(self, downloaded_exe_path: str, info: UpdateInfo | None):
+        """Create updater batch file, exit current app, replace EXE, and restart."""
+        current_exe = os.path.abspath(sys.executable)
+        if not current_exe.lower().endswith(".exe"):
+            raise RuntimeError("Current executable path is not an .exe file")
+        if not os.path.isfile(downloaded_exe_path):
+            raise RuntimeError("Downloaded update file was not found")
+
+        app_dir = os.path.dirname(current_exe)
+        exe_name = os.path.basename(current_exe)
+        backup_path = os.path.join(app_dir, f"{exe_name}.bak")
+        updater_bat = os.path.join(tempfile.gettempdir(), "itm_autoclicker_update.bat")
+        quoted_current = f'"{current_exe}"'
+        quoted_download = f'"{downloaded_exe_path}"'
+        quoted_backup = f'"{backup_path}"'
+        quoted_updater = f'"{updater_bat}"'
+
+        script = "\n".join([
+            "@echo off",
+            "setlocal",
+            f"set TARGET={quoted_current}",
+            f"set DOWNLOAD={quoted_download}",
+            f"set BACKUP={quoted_backup}",
+            ":waitloop",
+            "timeout /t 1 /nobreak >nul",
+            "tasklist /FI \"IMAGENAME eq " + exe_name + "\" | find /I \"" + exe_name + "\" >nul",
+            "if not errorlevel 1 goto waitloop",
+            "if exist %BACKUP% del /f /q %BACKUP% >nul 2>nul",
+            "if exist %TARGET% move /y %TARGET% %BACKUP% >nul 2>nul",
+            "move /y %DOWNLOAD% %TARGET% >nul",
+            "start \"\" %TARGET%",
+            f"del /f /q {quoted_updater} >nul 2>nul",
+            "endlocal",
+        ])
+        with open(updater_bat, "w", encoding="utf-8", newline="\r\n") as handle:
+            handle.write(script)
+
+        subprocess.Popen(
+            ["cmd.exe", "/c", updater_bat],
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        latest = info.latest_version if isinstance(info, UpdateInfo) else ""
+        self.statusBar.showMessage(f"Installing update {latest} and restarting...")
+        QTimer.singleShot(300, QApplication.instance().quit)
     
     def create_main_tab(self) -> QWidget:
         """Create main tab"""
