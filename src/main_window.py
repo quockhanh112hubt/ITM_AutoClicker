@@ -176,44 +176,97 @@ class MainWindow(QMainWindow):
     def create_about_tab(self) -> QWidget:
         """Create About tab with update-check UI."""
         tab = QWidget()
+        tab.setStyleSheet(
+            """
+            QLabel#AboutHeroTitle {
+                font-size: 22px;
+                font-weight: 700;
+                color: #1f2a35;
+            }
+            QLabel#AboutHeroSubtitle {
+                color: #506070;
+                font-size: 12px;
+            }
+            QWidget#AboutCard {
+                background: #ffffff;
+                border: 1px solid #d5dbe3;
+                border-radius: 10px;
+            }
+            QLabel#AboutSectionTitle {
+                font-size: 13px;
+                font-weight: 700;
+                color: #243241;
+            }
+            QPushButton#PrimaryAboutButton {
+                min-height: 34px;
+                padding: 4px 14px;
+                border-radius: 8px;
+                border: 1px solid #2f8f46;
+                background: #41b35b;
+                color: white;
+                font-weight: 700;
+            }
+            QPushButton#PrimaryAboutButton:disabled {
+                background: #bfc7cf;
+                border-color: #a9b1b9;
+                color: #eef2f5;
+            }
+            """
+        )
         layout = QVBoxLayout()
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(14)
 
-        title = QLabel("About")
-        title_font = QFont()
-        title_font.setPointSize(14)
-        title_font.setBold(True)
-        title.setFont(title_font)
-        layout.addWidget(title)
+        hero_card = QWidget()
+        hero_card.setObjectName("AboutCard")
+        hero_layout = QVBoxLayout(hero_card)
+        hero_layout.setContentsMargins(18, 16, 18, 16)
+        hero_layout.setSpacing(8)
+
+        title = QLabel(APP_NAME)
+        title.setObjectName("AboutHeroTitle")
+        hero_layout.addWidget(title)
 
         intro = QLabel(
-            "ITM AutoClicker automates target-window actions with image matching, OCR, "
-            "conditional IF rules, and record/playback workflows."
+            "Auto clicker for target-window automation, image matching, OCR recognition, "
+            "IF rules, and record/playback workflows."
         )
+        intro.setObjectName("AboutHeroSubtitle")
         intro.setWordWrap(True)
-        layout.addWidget(intro)
+        hero_layout.addWidget(intro)
+        layout.addWidget(hero_card)
+
+        update_card = QWidget()
+        update_card.setObjectName("AboutCard")
+        update_layout = QVBoxLayout(update_card)
+        update_layout.setContentsMargins(18, 16, 18, 16)
+        update_layout.setSpacing(8)
+
+        section_title = QLabel("Version & Update")
+        section_title.setObjectName("AboutSectionTitle")
+        update_layout.addWidget(section_title)
 
         self.lbl_about_version = QLabel(f"Current version: {APP_VERSION}")
-        layout.addWidget(self.lbl_about_version)
+        update_layout.addWidget(self.lbl_about_version)
 
         repo_label = QLabel(f"GitHub Releases: {GITHUB_REPO}")
         repo_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        layout.addWidget(repo_label)
+        update_layout.addWidget(repo_label)
 
         self.lbl_about_update_status = QLabel("Update status: Not checked yet")
         self.lbl_about_update_status.setWordWrap(True)
-        layout.addWidget(self.lbl_about_update_status)
+        update_layout.addWidget(self.lbl_about_update_status)
 
         button_row = QHBoxLayout()
+        button_row.setContentsMargins(0, 6, 0, 0)
         self.btn_check_update = QPushButton("Check for Update")
+        self.btn_check_update.setObjectName("PrimaryAboutButton")
         self.btn_check_update.clicked.connect(lambda: self.start_update_check(manual=True))
         button_row.addWidget(self.btn_check_update)
-
-        self.btn_open_releases = QPushButton("Open Releases")
-        self.btn_open_releases.clicked.connect(self.on_open_releases_page)
-        button_row.addWidget(self.btn_open_releases)
         button_row.addStretch()
-        layout.addLayout(button_row)
+        update_layout.addLayout(button_row)
 
+        layout.addWidget(update_card)
         layout.addStretch()
         tab.setLayout(layout)
         return tab
@@ -352,9 +405,6 @@ class MainWindow(QMainWindow):
                 button_text = "Check for Update (1)"
             self.btn_check_update.setText(button_text)
             self.btn_check_update.setEnabled((not self._update_check_in_progress) and (not self._update_download_in_progress))
-
-        if self.btn_open_releases:
-            self.btn_open_releases.setEnabled(True)
 
         if self.tabs and self._about_tab_index is not None:
             about_label = "About (1)" if self._update_available else "About"
@@ -807,17 +857,50 @@ class MainWindow(QMainWindow):
     def create_settings_tab(self) -> QWidget:
         """Create settings tab"""
         tab = QWidget()
+        tab.setStyleSheet(
+            """
+            QWidget#SettingsCard {
+                background: #ffffff;
+                border: 1px solid #d5dbe3;
+                border-radius: 10px;
+            }
+            QLabel#SettingsTitle {
+                font-size: 22px;
+                font-weight: 700;
+                color: #1f2a35;
+            }
+            QLabel#SettingsSubtitle {
+                font-size: 12px;
+                color: #607182;
+            }
+            QLabel#SettingsSectionTitle {
+                font-size: 13px;
+                font-weight: 700;
+                color: #243241;
+            }
+            """
+        )
         layout = QVBoxLayout()
-        
-        # Title
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(14)
+
         title = QLabel("Settings")
-        title_font = QFont()
-        title_font.setPointSize(14)
-        title_font.setBold(True)
-        title.setFont(title_font)
+        title.setObjectName("SettingsTitle")
         layout.addWidget(title)
-        
-        # Delay setting
+
+        subtitle = QLabel("Tune timing, input behavior, OCR, and global hotkeys.")
+        subtitle.setObjectName("SettingsSubtitle")
+        layout.addWidget(subtitle)
+
+        general_card = QWidget()
+        general_card.setObjectName("SettingsCard")
+        general_layout = QVBoxLayout(general_card)
+        general_layout.setContentsMargins(18, 16, 18, 16)
+        general_layout.setSpacing(10)
+        general_title = QLabel("General")
+        general_title.setObjectName("SettingsSectionTitle")
+        general_layout.addWidget(general_title)
+
         delay_layout = QHBoxLayout()
         delay_label = QLabel("Click Delay (ms):")
         self.delay_spinbox = QSpinBox()
@@ -829,7 +912,7 @@ class MainWindow(QMainWindow):
         delay_layout.addWidget(delay_label)
         delay_layout.addWidget(self.delay_spinbox)
         delay_layout.addStretch()
-        layout.addLayout(delay_layout)
+        general_layout.addLayout(delay_layout)
 
         speed_step_layout = QHBoxLayout()
         speed_step_label = QLabel("Speed Adjust Step (ms):")
@@ -844,9 +927,8 @@ class MainWindow(QMainWindow):
         speed_step_layout.addWidget(speed_step_label)
         speed_step_layout.addWidget(self.speed_step_spinbox)
         speed_step_layout.addStretch()
-        layout.addLayout(speed_step_layout)
-        
-        # Priority cooldown setting
+        general_layout.addLayout(speed_step_layout)
+
         priority_layout = QHBoxLayout()
         priority_label = QLabel("Priority Cooldown (ms):")
         self.priority_cooldown_spinbox = QSpinBox()
@@ -858,9 +940,8 @@ class MainWindow(QMainWindow):
         priority_layout.addWidget(priority_label)
         priority_layout.addWidget(self.priority_cooldown_spinbox)
         priority_layout.addStretch()
-        layout.addLayout(priority_layout)
+        general_layout.addLayout(priority_layout)
 
-        # OCR language
         ocr_layout = QHBoxLayout()
         ocr_label = QLabel("OCR Language:")
         self.ocr_language_combo = QComboBox()
@@ -881,9 +962,18 @@ class MainWindow(QMainWindow):
         ocr_layout.addWidget(ocr_label)
         ocr_layout.addWidget(self.ocr_language_combo)
         ocr_layout.addStretch()
-        layout.addLayout(ocr_layout)
-        
-        # Drag mode setting
+        general_layout.addLayout(ocr_layout)
+        layout.addWidget(general_card)
+
+        runtime_card = QWidget()
+        runtime_card.setObjectName("SettingsCard")
+        runtime_layout = QVBoxLayout(runtime_card)
+        runtime_layout.setContentsMargins(18, 16, 18, 16)
+        runtime_layout.setSpacing(10)
+        runtime_title = QLabel("Runtime")
+        runtime_title.setObjectName("SettingsSectionTitle")
+        runtime_layout.addWidget(runtime_title)
+
         drag_layout = QHBoxLayout()
         drag_label = QLabel("Drag Mode (target window):")
         self.drag_mode_combo = QComboBox()
@@ -901,9 +991,8 @@ class MainWindow(QMainWindow):
         drag_layout.addWidget(drag_label)
         drag_layout.addWidget(self.drag_mode_combo)
         drag_layout.addStretch()
-        layout.addLayout(drag_layout)
+        runtime_layout.addLayout(drag_layout)
 
-        # Mouse control mode
         mouse_mode_layout = QHBoxLayout()
         self.real_mouse_checkbox = QCheckBox("Use real mouse for all actions (occupy mouse)")
         self.real_mouse_checkbox.setChecked(bool(self.config.get("use_real_mouse", False)))
@@ -915,9 +1004,8 @@ class MainWindow(QMainWindow):
         )
         mouse_mode_layout.addWidget(self.real_mouse_checkbox)
         mouse_mode_layout.addStretch()
-        layout.addLayout(mouse_mode_layout)
+        runtime_layout.addLayout(mouse_mode_layout)
 
-        # Always-on-top mode
         ontop_layout = QHBoxLayout()
         self.always_on_top_checkbox = QCheckBox("Always on top")
         self.always_on_top_checkbox.setChecked(bool(self._always_on_top_enabled))
@@ -927,17 +1015,20 @@ class MainWindow(QMainWindow):
         )
         ontop_layout.addWidget(self.always_on_top_checkbox)
         ontop_layout.addStretch()
-        layout.addLayout(ontop_layout)
-        
-        # Hotkey settings
+        runtime_layout.addLayout(ontop_layout)
+        layout.addWidget(runtime_card)
+
+        hotkey_card = QWidget()
+        hotkey_card.setObjectName("SettingsCard")
+        hotkey_layout = QVBoxLayout(hotkey_card)
+        hotkey_layout.setContentsMargins(18, 16, 18, 16)
+        hotkey_layout.setSpacing(10)
         hotkey_title = QLabel("Hotkeys")
-        hotkey_font = QFont()
-        hotkey_font.setBold(True)
-        hotkey_title.setFont(hotkey_font)
-        layout.addWidget(hotkey_title)
-        
+        hotkey_title.setObjectName("SettingsSectionTitle")
+        hotkey_layout.addWidget(hotkey_title)
+
         self.hotkey_options = self._build_hotkey_options()
-        
+
         hk_confirm_layout = QHBoxLayout()
         hk_confirm_label = QLabel("Record Confirm (PAGE UP):")
         self.hotkey_page_up_combo = QComboBox()
@@ -952,7 +1043,7 @@ class MainWindow(QMainWindow):
         hk_confirm_layout.addWidget(hk_confirm_label)
         hk_confirm_layout.addWidget(self.hotkey_page_up_combo)
         hk_confirm_layout.addStretch()
-        layout.addLayout(hk_confirm_layout)
+        hotkey_layout.addLayout(hk_confirm_layout)
         
         hk_action_layout = QHBoxLayout()
         hk_action_label = QLabel("Record Action Menu (PAGE DOWN):")
@@ -968,7 +1059,7 @@ class MainWindow(QMainWindow):
         hk_action_layout.addWidget(hk_action_label)
         hk_action_layout.addWidget(self.hotkey_page_down_combo)
         hk_action_layout.addStretch()
-        layout.addLayout(hk_action_layout)
+        hotkey_layout.addLayout(hk_action_layout)
         
         hk_home_layout = QHBoxLayout()
         hk_home_label = QLabel("Start/Pause/Resume (HOME):")
@@ -984,7 +1075,7 @@ class MainWindow(QMainWindow):
         hk_home_layout.addWidget(hk_home_label)
         hk_home_layout.addWidget(self.hotkey_home_combo)
         hk_home_layout.addStretch()
-        layout.addLayout(hk_home_layout)
+        hotkey_layout.addLayout(hk_home_layout)
 
         hk_stop_layout = QHBoxLayout()
         hk_stop_label = QLabel("Stop (END):")
@@ -1000,7 +1091,7 @@ class MainWindow(QMainWindow):
         hk_stop_layout.addWidget(hk_stop_label)
         hk_stop_layout.addWidget(self.hotkey_end_combo)
         hk_stop_layout.addStretch()
-        layout.addLayout(hk_stop_layout)
+        hotkey_layout.addLayout(hk_stop_layout)
 
         hk_record_layout = QHBoxLayout()
         hk_record_label = QLabel("Record Screen Toggle:")
@@ -1016,10 +1107,10 @@ class MainWindow(QMainWindow):
         hk_record_layout.addWidget(hk_record_label)
         hk_record_layout.addWidget(self.hotkey_record_combo)
         hk_record_layout.addStretch()
-        layout.addLayout(hk_record_layout)
-        
+        hotkey_layout.addLayout(hk_record_layout)
+        layout.addWidget(hotkey_card)
+
         layout.addStretch()
-        
         tab.setLayout(layout)
         return tab
     
