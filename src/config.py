@@ -9,6 +9,7 @@ from src.constants import (
     DEFAULT_CLICK_DELAY_MS, DEFAULT_PRIORITY_COOLDOWN_MS, 
     DEFAULT_IMAGE_CONFIDENCE, CONFIG_FILE_PATH
 )
+from src.app_info import GITHUB_REPO
 
 
 class Config:
@@ -19,7 +20,9 @@ class Config:
         "priority_cooldown_ms": DEFAULT_PRIORITY_COOLDOWN_MS,
         "image_confidence": DEFAULT_IMAGE_CONFIDENCE,
         "auto_save": True,
-        "last_script": None
+        "last_script": None,
+        "auto_check_updates": True,
+        "github_repo": GITHUB_REPO,
     }
     
     def __init__(self, config_file: str = CONFIG_FILE_PATH) -> None:

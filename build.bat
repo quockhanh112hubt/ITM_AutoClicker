@@ -2,20 +2,24 @@
 setlocal
 
 REM ITM AutoClicker build script
-REM Update this version for each release
 set APP_NAME=ITM_AutoClicker
-set APP_VERSION=1.0.5
 set ENTRYPOINT=main.py
-
-echo ========================================
-echo Building %APP_NAME% v%APP_VERSION%
-echo ========================================
 
 if exist ".venv\Scripts\python.exe" (
     set PYTHON=.venv\Scripts\python.exe
 ) else (
     set PYTHON=python
 )
+
+for /f "usebackq delims=" %%v in (`%PYTHON% -c "from src.app_info import APP_VERSION; print(APP_VERSION)"`) do set APP_VERSION=%%v
+if "%APP_VERSION%"=="" (
+    echo ERROR: Failed to read APP_VERSION from src.app_info
+    exit /b 1
+)
+
+echo ========================================
+echo Building %APP_NAME% v%APP_VERSION%
+echo ========================================
 
 echo Using Python: %PYTHON%
 

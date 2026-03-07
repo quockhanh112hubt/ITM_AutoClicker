@@ -5,6 +5,8 @@ import sys
 import os
 import json
 import uuid
+import threading
+import webbrowser
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QTabWidget,
@@ -26,6 +28,8 @@ from src.ui.dialogs import SettingsDialog
 from src.ui.recorders import PositionRecorder, ImageRecorder
 from src.ui.widgets import ScriptTreeWidget, DragCreateToolButton, DragSelectTargetButton
 from src.screen_action_recorder import ScreenActionRecorder
+from src.app_info import APP_NAME, APP_VERSION, GITHUB_REPO, GITHUB_RELEASES_URL
+from src.update_checker import check_github_update, UpdateInfo
 from pynput import mouse
 import win32gui
 import win32con
@@ -36,11 +40,12 @@ class MainWindow(QMainWindow):
     action_executed_signal = pyqtSignal(int)
     action_detail_changed_signal = pyqtSignal(int, str)
     status_changed_signal = pyqtSignal(str)
+    update_check_completed_signal = pyqtSignal(object)
     
     def __init__(self):
         super().__init__()
         self._icons = self._load_ui_icons()
-        self.setWindowTitle("ITM AutoClicker")
+        self.setWindowTitle(APP_NAME)
         if not self._icons.get("app").isNull():
             self.setWindowIcon(self._icons.get("app"))
         self.setMinimumSize(800, 600)
@@ -108,8 +113,17 @@ class MainWindow(QMainWindow):
         self.action_executed_signal.connect(self._on_action_executed_main_thread)
         self.action_detail_changed_signal.connect(self._on_action_detail_changed_main_thread)
         self.status_changed_signal.connect(self.on_status_changed)
+        self.update_check_completed_signal.connect(self._on_update_check_completed_main_thread)
         self._ensure_default_group()
         self._always_on_top_enabled = bool(self.config.get("always_on_top", False))
+        self._about_tab_index: int | None = None
+        self._update_check_in_progress = False
+        self._update_available = False
+        self._update_info: UpdateInfo | None = None
+        self.lbl_about_update_status: QLabel | None = None
+        self.lbl_about_version: QLabel | None = None
+        self.btn_check_update: QPushButton | None = None
+        self.btn_open_releases: QPushButton | None = None
         
         # Setup UI
         self.setup_ui()
@@ -118,6 +132,8 @@ class MainWindow(QMainWindow):
         
         # Update table
         self.update_table()
+        self._refresh_about_update_ui()
+        QTimer.singleShot(1200, self._auto_check_for_updates_on_startup)
     
     def setup_ui(self):
         """Setup the user interface"""
@@ -136,6 +152,11 @@ class MainWindow(QMainWindow):
         # Tab 2: Settings
         settings_tab = self.create_settings_tab()
         self.tabs.addTab(settings_tab, "Settings")
+
+        # Tab 3: About
+        about_tab = self.create_about_tab()
+        self.tabs.addTab(about_tab, "About")
+        self._about_tab_index = self.tabs.count() - 1
         
         layout.addWidget(self.tabs)
         
@@ -145,6 +166,202 @@ class MainWindow(QMainWindow):
         self.statusBar.showMessage("Ready")
         
         central_widget.setLayout(layout)
+
+    def create_about_tab(self) -> QWidget:
+        """Create About tab with update-check UI."""
+        tab = QWidget()
+        layout = QVBoxLayout()
+
+        title = QLabel("About")
+        title_font = QFont()
+        title_font.setPointSize(14)
+        title_font.setBold(True)
+        title.setFont(title_font)
+        layout.addWidget(title)
+
+        intro = QLabel(
+            "ITM AutoClicker automates target-window actions with image matching, OCR, "
+            "conditional IF rules, and record/playback workflows."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        self.lbl_about_version = QLabel(f"Current version: {APP_VERSION}")
+        layout.addWidget(self.lbl_about_version)
+
+        repo_label = QLabel(f"GitHub Releases: {GITHUB_REPO}")
+        repo_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(repo_label)
+
+        self.lbl_about_update_status = QLabel("Update status: Not checked yet")
+        self.lbl_about_update_status.setWordWrap(True)
+        layout.addWidget(self.lbl_about_update_status)
+
+        button_row = QHBoxLayout()
+        self.btn_check_update = QPushButton("Check for Update")
+        self.btn_check_update.clicked.connect(lambda: self.start_update_check(manual=True))
+        button_row.addWidget(self.btn_check_update)
+
+        self.btn_open_releases = QPushButton("Open Releases")
+        self.btn_open_releases.clicked.connect(self.on_open_releases_page)
+        button_row.addWidget(self.btn_open_releases)
+        button_row.addStretch()
+        layout.addLayout(button_row)
+
+        layout.addStretch()
+        tab.setLayout(layout)
+        return tab
+
+    def _auto_check_for_updates_on_startup(self):
+        """Start non-blocking update check when app opens."""
+        if not bool(self.config.get("auto_check_updates", True)):
+            return
+        self.start_update_check(manual=False)
+
+    def start_update_check(self, manual: bool = False):
+        """Check GitHub Releases for a newer version in a background thread."""
+        if self._update_check_in_progress:
+            if manual:
+                self.statusBar.showMessage("Update check already running")
+            return
+
+        self._update_check_in_progress = True
+        self._refresh_about_update_ui()
+        if manual:
+            self.statusBar.showMessage("Checking for updates...")
+
+        worker = threading.Thread(
+            target=self._run_update_check_worker,
+            args=(bool(manual),),
+            daemon=True,
+        )
+        worker.start()
+
+    def _run_update_check_worker(self, manual: bool):
+        """Worker thread for GitHub release check."""
+        repo = str(self.config.get("github_repo", GITHUB_REPO) or GITHUB_REPO).strip() or GITHUB_REPO
+        info = check_github_update(current_version=APP_VERSION, github_repo=repo)
+        self.update_check_completed_signal.emit({"manual": bool(manual), "info": info})
+
+    def _on_update_check_completed_main_thread(self, payload: object):
+        """Consume update result on Qt main thread."""
+        self._update_check_in_progress = False
+        data = payload if isinstance(payload, dict) else {}
+        manual = bool(data.get("manual", False))
+        info = data.get("info")
+        if not isinstance(info, UpdateInfo):
+            info = UpdateInfo(False, APP_VERSION, "", GITHUB_RELEASES_URL, "", error="Unknown update result")
+        self._update_info = info
+        self._update_available = bool(info.update_available)
+        self._refresh_about_update_ui()
+
+        if info.error:
+            self.statusBar.showMessage(f"Update check failed: {info.error}")
+            if manual:
+                QMessageBox.warning(
+                    self,
+                    "Check for Update",
+                    f"Unable to check GitHub Releases.\n\nReason: {info.error}"
+                )
+            return
+
+        if info.no_release:
+            self.statusBar.showMessage("No GitHub Release published yet")
+            if manual:
+                QMessageBox.information(
+                    self,
+                    "Check for Update",
+                    "No GitHub Release has been published for this repository yet."
+                )
+            return
+
+        if info.update_available:
+            self.statusBar.showMessage(f"New version available: {info.latest_version}")
+            if manual:
+                self._show_update_available_dialog(info)
+        else:
+            self.statusBar.showMessage(f"You are up to date ({info.current_version})")
+            if manual:
+                QMessageBox.information(
+                    self,
+                    "Check for Update",
+                    f"You are using the latest version.\n\nCurrent version: {info.current_version}"
+                )
+
+    def _show_update_available_dialog(self, info: UpdateInfo):
+        """Show manual update result dialog with option to open releases page."""
+        box = QMessageBox(self)
+        box.setWindowTitle("Update Available")
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setText(
+            f"A newer version is available.\n\n"
+            f"Current version: {info.current_version}\n"
+            f"Latest version: {info.latest_version}"
+        )
+        if info.release_name:
+            box.setInformativeText(f"Release: {info.release_name}")
+        open_button = box.addButton("Open Releases", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton(QMessageBox.StandardButton.Close)
+        box.exec()
+        if box.clickedButton() is open_button:
+            self.on_open_releases_page()
+
+    def _refresh_about_update_ui(self):
+        """Refresh About tab labels/button text and badge state."""
+        if self.lbl_about_version:
+            self.lbl_about_version.setText(f"Current version: {APP_VERSION}")
+
+        status_text = "Update status: Not checked yet"
+        if self._update_check_in_progress:
+            status_text = "Update status: Checking GitHub Releases..."
+        elif isinstance(self._update_info, UpdateInfo):
+            if self._update_info.no_release:
+                status_text = "Update status: No GitHub Release published yet"
+            elif self._update_info.error:
+                status_text = f"Update status: Check failed ({self._update_info.error})"
+            elif self._update_info.update_available:
+                status_text = (
+                    f"Update status: New version {self._update_info.latest_version} is available "
+                    f"(current: {self._update_info.current_version})"
+                )
+            else:
+                status_text = f"Update status: You are up to date ({self._update_info.current_version})"
+
+        if self.lbl_about_update_status:
+            self.lbl_about_update_status.setText(status_text)
+            if self._update_available:
+                self.lbl_about_update_status.setStyleSheet("color: #c62828; font-weight: 600;")
+            elif self._update_check_in_progress:
+                self.lbl_about_update_status.setStyleSheet("color: #1565c0; font-weight: 600;")
+            else:
+                self.lbl_about_update_status.setStyleSheet("")
+
+        if self.btn_check_update:
+            button_text = "Check for Update"
+            if self._update_check_in_progress:
+                button_text = "Checking..."
+            elif self._update_available:
+                button_text = "Check for Update (1)"
+            self.btn_check_update.setText(button_text)
+            self.btn_check_update.setEnabled(not self._update_check_in_progress)
+
+        if self.btn_open_releases:
+            self.btn_open_releases.setEnabled(True)
+
+        if self.tabs and self._about_tab_index is not None:
+            about_label = "About (1)" if self._update_available else "About"
+            self.tabs.setTabText(int(self._about_tab_index), about_label)
+
+    def on_open_releases_page(self):
+        """Open GitHub Releases page in default browser."""
+        url = GITHUB_RELEASES_URL
+        if isinstance(self._update_info, UpdateInfo) and self._update_info.release_url:
+            url = self._update_info.release_url
+        try:
+            webbrowser.open(url)
+            self.statusBar.showMessage("Opened GitHub Releases page")
+        except Exception as e:
+            QMessageBox.warning(self, "Open Releases", f"Unable to open browser:\n{e}")
     
     def create_main_tab(self) -> QWidget:
         """Create main tab"""
