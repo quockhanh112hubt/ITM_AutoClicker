@@ -244,6 +244,13 @@ class MainWindow(QMainWindow):
         tab = QWidget()
         tab.setStyleSheet(
             """
+            QWidget {
+                background: #f6f8fb;
+                color: #1f2a35;
+            }
+            QLabel {
+                background: transparent;
+            }
             QLabel#AboutHeroTitle {
                 font-size: 22px;
                 font-weight: 700;
@@ -919,6 +926,24 @@ class MainWindow(QMainWindow):
         tab = QWidget()
         tab.setStyleSheet(
             """
+            QWidget {
+                background: #f6f8fb;
+                color: #1f2a35;
+            }
+            QLabel {
+                background: transparent;
+            }
+            QSpinBox, QComboBox, QLineEdit {
+                background: #ffffff;
+                color: #1f2a35;
+                border: 1px solid #b7c1cb;
+                border-radius: 6px;
+                padding: 2px 6px;
+                min-height: 22px;
+            }
+            QCheckBox {
+                color: #1f2a35;
+            }
             QWidget#SettingsCard {
                 background: #ffffff;
                 border: 1px solid #d5dbe3;
