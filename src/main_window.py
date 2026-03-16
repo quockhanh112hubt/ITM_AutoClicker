@@ -17,8 +17,8 @@ from PyQt6.QtWidgets import (
     QComboBox, QTreeWidget, QTreeWidgetItem, QInputDialog, QToolButton, QCheckBox, QMenu, QApplication, QLineEdit,
     QAbstractItemView, QSystemTrayIcon
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer
-from PyQt6.QtGui import QFont, QPixmap, QIcon, QCursor, QColor, QBrush
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QEvent
+from PyQt6.QtGui import QFont, QPixmap, QIcon, QCursor, QColor, QBrush, QGuiApplication, QPainter, QPainterPath, QPen
 from src.click_script import ClickScript, ClickAction, ClickType
 from src.config import Config
 from src.auto_clicker import AutoClicker
@@ -36,6 +36,70 @@ from pynput import mouse
 import win32gui
 import win32con
 
+
+class FloatingPanel(QWidget):
+    """Draggable floating panel window."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._drag_active = False
+        self._drag_offset = None
+        self._drag_start_pos = None
+        self._corner_radius = 18
+        self._bg_color = QColor("#f7f9fc")
+        self._border_color = QColor("#cfd6df")
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_active = True
+            self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            self._drag_start_pos = event.globalPosition().toPoint()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_active and self._drag_offset is not None:
+            self.move(event.globalPosition().toPoint() - self._drag_offset)
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_active = False
+        self._drag_offset = None
+        self._drag_start_pos = None
+        super().mouseReleaseEvent(event)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rect = self.rect().adjusted(1, 1, -1, -1)
+        rectf = rect.toRectF()
+        path = QPainterPath()
+        path.addRoundedRect(rectf, self._corner_radius, self._corner_radius)
+        painter.fillPath(path, self._bg_color)
+        pen = QPen(self._border_color, 1)
+        painter.setPen(pen)
+        painter.drawPath(path)
+        painter.end()
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+            self._drag_active = True
+            self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            self._drag_start_pos = event.globalPosition().toPoint()
+            return False
+        if event.type() == QEvent.Type.MouseMove and self._drag_active and self._drag_offset is not None:
+            current = event.globalPosition().toPoint()
+            if self._drag_start_pos is not None:
+                delta = (current - self._drag_start_pos).manhattanLength()
+                if delta < 4:
+                    return False
+            self.move(current - self._drag_offset)
+            return True
+        if event.type() == QEvent.Type.MouseButtonRelease:
+            self._drag_active = False
+            self._drag_offset = None
+            self._drag_start_pos = None
+            return False
+        return super().eventFilter(obj, event)
 
 class MainWindow(QMainWindow):
     """Main application window"""
@@ -132,9 +196,17 @@ class MainWindow(QMainWindow):
         self.tray_icon: QSystemTrayIcon | None = None
         self._tray_message_shown = False
         self._is_exiting = False
+        self.btn_float: QPushButton | None = None
+        self._float_window: QWidget | None = None
+        self._float_start_btn: QPushButton | None = None
+        self._float_stop_btn: QPushButton | None = None
+        self._float_restore_btn: QPushButton | None = None
+        self._floating_visible = False
+        self._floating_pos = None
         
         # Setup UI
         self.setup_ui()
+        self._create_floating_window()
         self._apply_always_on_top_to_main()
         self._setup_system_tray()
         self.keyboard_listener.start()
@@ -679,12 +751,16 @@ class MainWindow(QMainWindow):
         self.btn_save_top = QPushButton("Save Script")
         self.btn_save_top.clicked.connect(self.on_save_script)
         self.btn_save_top.setToolTip("Save current script list to JSON file.")
+        self.btn_float = QPushButton("Float")
+        self.btn_float.clicked.connect(self._show_floating_window)
+        self.btn_float.setToolTip("Collapse to floating Start/Stop panel")
         target_layout.addWidget(target_title)
         target_layout.addWidget(self.target_info_label)
         target_layout.addStretch()
         target_layout.addWidget(self.btn_load_top)
         target_layout.addWidget(self.btn_save_top)
         target_layout.addWidget(self.btn_select_target)
+        target_layout.addWidget(self.btn_float)
         layout.addLayout(target_layout)
 
         # Target geometry controls
@@ -3178,6 +3254,21 @@ class MainWindow(QMainWindow):
             "QPushButton:hover { background: #e7f3ff; }"
             "QPushButton:pressed { border-bottom: 1px solid #2d5c88; padding-top: 6px; padding-bottom: 2px; }"
         )
+        accent_red = (
+            "QPushButton {"
+            " min-height: 30px;"
+            " padding: 4px 14px;"
+            " border-radius: 8px;"
+            " border: 1px solid #a53b3b;"
+            " border-bottom: 3px solid #823030;"
+            " background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
+            "     stop:0 #fff2f2, stop:1 #f5c7c7);"
+            " color: #4b1f1f;"
+            " font-weight: 700;"
+            "}"
+            "QPushButton:hover { background: #ffe5e5; }"
+            "QPushButton:pressed { border-bottom: 1px solid #823030; padding-top: 6px; padding-bottom: 2px; }"
+        )
         utility = (
             "QPushButton {"
             " min-height: 26px;"
@@ -3200,6 +3291,8 @@ class MainWindow(QMainWindow):
             self.btn_save_top.setStyleSheet(base)
         if getattr(self, "btn_select_target", None):
             self.btn_select_target.setStyleSheet(accent)
+        if getattr(self, "btn_float", None):
+            self.btn_float.setStyleSheet(accent_red)
         if getattr(self, "btn_refresh_target_rect", None):
             self.btn_refresh_target_rect.setStyleSheet(utility)
         if getattr(self, "btn_fix_target_rect", None):
@@ -3377,6 +3470,58 @@ class MainWindow(QMainWindow):
         )
         self.btn_start.setStyleSheet(start_style)
         self.btn_stop.setStyleSheet(stop_style)
+        if self._float_start_btn is not None:
+            if not running:
+                self._float_start_btn.setText(">")
+            elif is_paused:
+                self._float_start_btn.setText(">")
+            else:
+                self._float_start_btn.setText("||")
+            self._float_start_btn.setEnabled(start_active)
+            float_start_style = (
+                "QPushButton {"
+                "background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #56c46c, stop:1 #2f9f45);"
+                "color: white; font-weight: 800; border: 1px solid #2a7f3b; border-bottom: 3px solid #1f5f2c;"
+                "border-radius: 23px; padding: 0px; }"
+                "QPushButton:pressed { border-bottom: 1px solid #1f5f2c; padding-top: 2px; }"
+                if not running else
+                "QPushButton {"
+                "background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #ffd36f, stop:1 #e4a72d);"
+                "color: #2f2f2f; font-weight: 800; border: 1px solid #b5831f; border-bottom: 3px solid #8f6518;"
+                "border-radius: 23px; padding: 0px; }"
+                "QPushButton:pressed { border-bottom: 1px solid #8f6518; padding-top: 2px; }"
+                if not is_paused else
+                "QPushButton {"
+                "background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #7db5ff, stop:1 #4f86d8);"
+                "color: white; font-weight: 800; border: 1px solid #3f6cae; border-bottom: 3px solid #315486;"
+                "border-radius: 23px; padding: 0px; }"
+                "QPushButton:pressed { border-bottom: 1px solid #315486; padding-top: 2px; }"
+            )
+            self._float_start_btn.setStyleSheet(float_start_style)
+        if self._float_stop_btn is not None:
+            self._float_stop_btn.setText("X")
+            self._float_stop_btn.setEnabled(stop_active)
+            float_stop_style = (
+                "QPushButton {"
+                "background: qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #ff5f54, stop:1 #df3a30);"
+                "color: white; font-weight: 800; border: 1px solid #b92f27; border-bottom: 3px solid #8f241d;"
+                "border-radius: 23px; padding: 0px; }"
+                "QPushButton:pressed { border-bottom: 1px solid #8f241d; padding-top: 2px; }"
+                if stop_active else
+                "QPushButton {"
+                "background: #e6e8ea; color: #8b949e; font-weight: 800; border: 1px solid #c7ccd1;"
+                "border-bottom: 2px solid #b6bcc3; border-radius: 23px; padding: 0px; }"
+            )
+            self._float_stop_btn.setStyleSheet(float_stop_style)
+        if self._float_restore_btn is not None:
+            self._float_restore_btn.setText("O")
+            self._float_restore_btn.setStyleSheet(
+                "QPushButton {"
+                "background: #f1f3f6; color: #3a4652; font-weight: 700;"
+                "border: 1px solid #c1c9d2; border-bottom: 2px solid #9aa3ad;"
+                "border-radius: 16px; padding: 0px; }"
+                "QPushButton:pressed { border-bottom: 1px solid #9aa3ad; padding-top: 1px; }"
+            )
 
     def _set_action_add_ui_visible(self, visible: bool):
         """Show/hide action-adding UI while script is running."""
@@ -4558,6 +4703,8 @@ class MainWindow(QMainWindow):
     
     def closeEvent(self, event):
         """Handle window close"""
+        if self._float_window is not None:
+            self._float_window.close()
         if self.tray_icon and self.tray_icon.isVisible() and (not self._is_exiting):
             self._hide_to_tray()
             event.ignore()
@@ -4571,6 +4718,91 @@ class MainWindow(QMainWindow):
         if self.tray_icon:
             self.tray_icon.hide()
         event.accept()
+
+    def _create_floating_window(self):
+        """Create floating Start/Stop panel."""
+        if self._float_window is not None:
+            return
+        flags = (
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
+        panel = FloatingPanel(None)
+        panel.setWindowFlags(flags)
+        panel.setWindowTitle(APP_NAME)
+        panel.setWindowIcon(self.windowIcon())
+        panel.setObjectName("FloatPanel")
+        layout = QHBoxLayout(panel)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(0)
+
+        self._float_start_btn = QPushButton("Start")
+        self._float_start_btn.setFixedSize(46, 46)
+        self._float_start_btn.clicked.connect(self.on_start_pause_resume)
+        layout.addWidget(self._float_start_btn)
+
+        self._float_stop_btn = QPushButton("Stop")
+        self._float_stop_btn.setFixedSize(46, 46)
+        self._float_stop_btn.clicked.connect(self.on_stop)
+        layout.addWidget(self._float_stop_btn)
+
+        layout.addSpacing(8)
+        self._float_restore_btn = QPushButton("O")
+        self._float_restore_btn.setFixedSize(32, 32)
+        self._float_restore_btn.clicked.connect(self._restore_from_floating)
+        layout.addWidget(self._float_restore_btn)
+
+        for btn in (self._float_start_btn, self._float_stop_btn, self._float_restore_btn):
+            btn.installEventFilter(panel)
+
+        panel.setFixedSize(170, 62)
+        self._float_window = panel
+        self._update_run_button_states(self.auto_clicker.is_running)
+
+    def _position_floating_window(self):
+        """Position floating panel at bottom-right."""
+        if self._float_window is None:
+            return
+        if self._floating_pos is not None:
+            try:
+                self._float_window.move(self._floating_pos)
+                return
+            except Exception:
+                pass
+        screen = QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+        geo = screen.availableGeometry()
+        margin = 16
+        x = int(geo.right() - self._float_window.width() - margin)
+        y = int(geo.bottom() - self._float_window.height() - margin)
+        self._float_window.move(x, y)
+
+    def _show_floating_window(self):
+        """Hide main UI and show floating panel."""
+        if self._float_window is None:
+            self._create_floating_window()
+        self._position_floating_window()
+        if self._float_window is not None:
+            self._float_window.show()
+            self._float_window.raise_()
+            self._float_window.activateWindow()
+        self._floating_visible = True
+        self.hide()
+
+    def _restore_from_floating(self):
+        """Restore main window from floating panel."""
+        if self._float_window is not None:
+            try:
+                self._floating_pos = self._float_window.pos()
+            except Exception:
+                self._floating_pos = None
+            self._float_window.hide()
+        self._floating_visible = False
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
 
 
 def main():
