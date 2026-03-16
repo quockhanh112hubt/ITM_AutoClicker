@@ -112,7 +112,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self._icons = self._load_ui_icons()
-        self.setWindowTitle(APP_NAME)
+        self.setWindowTitle(f"{APP_NAME} v{APP_VERSION}")
         if not self._icons.get("app").isNull():
             self.setWindowIcon(self._icons.get("app"))
         self.setMinimumSize(800, 600)
@@ -747,60 +747,63 @@ class MainWindow(QMainWindow):
     def create_main_tab(self) -> QWidget:
         """Create main tab"""
         tab = QWidget()
-        tab.setStyleSheet(
-            """
-            QWidget {
+        checkbox_unchecked = self._resource_path(os.path.join("resource", "checkbox_unchecked.png")).replace("\\", "/")
+        checkbox_checked = self._resource_path(os.path.join("resource", "checkbox_checked.png")).replace("\\", "/")
+        style = """
+            QWidget {{
                 background: #f7f9fc;
                 color: #1a2734;
                 font-family: "Segoe UI";
-            }
-            QLabel { background: transparent; color: #1a2734; }
-            QSpinBox, QComboBox, QLineEdit {
+            }}
+            QLabel {{ background: transparent; color: #1a2734; }}
+            QSpinBox, QComboBox, QLineEdit {{
                 background: #ffffff;
                 color: #1a2734;
                 border: 1px solid #b8c4d1;
                 border-radius: 6px;
                 padding: 2px 6px;
-            }
-            QSpinBox::up-button, QSpinBox::down-button {
+            }}
+            QSpinBox::up-button, QSpinBox::down-button {{
                 width: 14px;
-            }
-            QToolTip {
+            }}
+            QToolTip {{
                 background: #1f2a36;
                 color: #f6f8fa;
                 border: 1px solid #3b4a5a;
-            }
-            QTreeWidget {
+            }}
+            QTreeWidget {{
                 background: #ffffff;
                 color: #1a2734;
                 border: 1px solid #cfd6df;
                 border-radius: 8px;
-            }
-            QTreeWidget::indicator {
+            }}
+            QTreeWidget::indicator {{
                 width: 14px;
                 height: 14px;
-            }
-            QTreeWidget::indicator:unchecked {
+            }}
+            QTreeWidget::indicator:unchecked {{
                 border: 1px solid #7b8794;
                 border-radius: 3px;
                 background: #ffffff;
-            }
-            QTreeWidget::indicator:checked {
+                image: url("{checkbox_unchecked}");
+            }}
+            QTreeWidget::indicator:checked {{
                 border: 1px solid #2f6fb2;
                 border-radius: 3px;
                 background: #4a90e2;
-            }
-            QTreeWidget::indicator:checked:hover {
+                image: url("{checkbox_checked}");
+            }}
+            QTreeWidget::indicator:checked:hover {{
                 background: #3b7fcf;
-            }
-            QHeaderView::section {
+            }}
+            QHeaderView::section {{
                 background: #eef3f8;
                 color: #22303d;
                 border: 1px solid #d6dde6;
                 padding: 4px 6px;
-            }
-            """
-        )
+            }}
+            """.format(checkbox_unchecked=checkbox_unchecked, checkbox_checked=checkbox_checked)
+        tab.setStyleSheet(style)
         layout = QVBoxLayout()
 
         # Global target window selector
