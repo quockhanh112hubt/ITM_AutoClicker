@@ -688,25 +688,30 @@ class MainWindow(QMainWindow):
         new_path = f"{current_exe}.new"
         if os.path.abspath(downloaded_exe_path) != os.path.abspath(new_path):
             raise RuntimeError("Downloaded update file is not the expected .new file")
-        backup_path = f"{current_exe}.bak"
+        backup_path = f"{current_exe}.backup"
         updater_bat = os.path.join(app_dir, "update.bat")
 
         script = "\r\n".join([
             "@echo off",
+            f"title {APP_NAME} Auto Update",
             "setlocal",
-            f'set "TARGET={current_exe}"',
-            f'set "NEWFILE={new_path}"',
-            f'set "BACKUP={backup_path}"',
-            "timeout /t 2 /nobreak >nul",
-            "if not exist \"%NEWFILE%\" goto cleanup",
-            "if exist \"%BACKUP%\" del /f /q \"%BACKUP%\" >nul 2>nul",
-            "if exist \"%TARGET%\" ren \"%TARGET%\" \"" + os.path.basename(backup_path) + "\"",
-            "ren \"%NEWFILE%\" \"" + exe_name + "\"",
+            f'cd /d "{app_dir}"',
+            f'set "TARGET={exe_name}"',
+            f'set "NEWFILE={os.path.basename(new_path)}"',
+            f'set "BACKUP={os.path.basename(backup_path)}"',
+            "timeout /t 3 /nobreak >nul 2>&1",
+            "if not exist \"%NEWFILE%\" exit /b 1",
+            "if exist \"%TARGET%\" (",
+            "  del /f /q \"%TARGET%\" >nul 2>&1",
+            "  if exist \"%TARGET%\" exit /b 1",
+            ")",
+            "if exist \"%BACKUP%\" del /f /q \"%BACKUP%\" >nul 2>&1",
+            "ren \"%NEWFILE%\" \"%TARGET%\" >nul 2>&1",
+            "if not exist \"%TARGET%\" exit /b 1",
             "start \"\" \"%TARGET%\"",
-            "if exist \"%BACKUP%\" del /f /q \"%BACKUP%\" >nul 2>nul",
-            ":cleanup",
-            "del /f /q \"%~f0\" >nul 2>nul",
-            "endlocal",
+            "timeout /t 2 /nobreak >nul 2>&1",
+            "del /f /q \"%~f0\" >nul 2>&1",
+            "exit /b 0",
         ])
         with open(updater_bat, "w", encoding="utf-8", newline="\r\n") as handle:
             handle.write(script)
@@ -975,6 +980,7 @@ class MainWindow(QMainWindow):
             self.btn_speed_down.setIconSize(QPixmap(18, 18).size())
         self.btn_speed_down.clicked.connect(self.on_speed_down_clicked)
         speed_layout.addWidget(self.btn_speed_down)
+        self._apply_speed_button_style()
         action_toolbar.addLayout(speed_layout)
 
         self.btn_stop = QPushButton(f"Stop ({self._to_hotkey_display(self.hotkey_bindings['end'])})")
@@ -1032,6 +1038,7 @@ class MainWindow(QMainWindow):
             adv_toolbar.addWidget(btn)
             self._advanced_toolbar_buttons.append(btn)
         adv_toolbar.addStretch()
+        self._apply_advanced_toolbar_button_style()
         layout.addWidget(self._advanced_action_toolbar_widget)
         
         # Tree list for script branches/actions
@@ -3259,6 +3266,59 @@ class MainWindow(QMainWindow):
         """
         for button in self._action_tool_buttons:
             button.setStyleSheet(style)
+
+    def _apply_advanced_toolbar_button_style(self):
+        """Apply 3D style for advanced action toolbar buttons."""
+        style = """
+        QToolButton {
+            padding: 2px;
+            border: 1px solid #8d99a6;
+            border-bottom: 3px solid #64707d;
+            border-radius: 8px;
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                        stop:0 #fefefe, stop:1 #e2e6ea);
+            color: #22303d;
+        }
+        QToolButton:hover {
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                        stop:0 #ffffff, stop:1 #d8dee5);
+            border: 1px solid #6a7785;
+        }
+        QToolButton:pressed {
+            border: 1px solid #4f5a67;
+            border-bottom: 1px solid #4f5a67;
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                        stop:0 #cfd5dc, stop:1 #b9c1ca);
+            color: #111a22;
+        }
+        QToolButton:disabled {
+            border: 1px solid #c3c8cd;
+            border-bottom: 2px solid #b5bcc3;
+            background: #e9ecef;
+            color: #8d96a0;
+        }
+        """
+        for button in getattr(self, "_advanced_toolbar_buttons", []) or []:
+            button.setStyleSheet(style)
+
+    def _apply_speed_button_style(self):
+        """Apply border style for speed up/down buttons."""
+        style = (
+            "QPushButton {"
+            " border: 1px solid #8d99a6;"
+            " border-bottom: 3px solid #64707d;"
+            " border-radius: 6px;"
+            " background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
+            "     stop:0 #fefefe, stop:1 #e2e6ea);"
+            "}"
+            "QPushButton:hover { background: #f7fafc; }"
+            "QPushButton:pressed { border-bottom: 1px solid #64707d; padding-top: 2px; }"
+            "QPushButton:disabled { background: #e9ecef; border: 1px solid #c3c8cd; }"
+        )
+        if getattr(self, "btn_speed_up", None):
+            self.btn_speed_up.setStyleSheet(style)
+        if getattr(self, "btn_speed_down", None):
+            self.btn_speed_down.setStyleSheet(style)
 
     def _apply_top_control_button_style(self):
         """Apply a more polished style to top utility buttons."""
