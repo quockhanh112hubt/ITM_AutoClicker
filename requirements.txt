@@ -6,3 +6,4 @@ Pillow==12.1.1
 numpy<2
 pywin32
 pytesseract==0.3.13
+certifi==2025.1.31

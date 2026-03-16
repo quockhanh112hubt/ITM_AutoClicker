@@ -31,7 +31,7 @@ from src.ui.recorders import PositionRecorder, ImageRecorder
 from src.ui.widgets import ScriptTreeWidget, DragCreateToolButton, DragSelectTargetButton
 from src.screen_action_recorder import ScreenActionRecorder
 from src.app_info import APP_NAME, APP_VERSION, GITHUB_REPO, GITHUB_RELEASES_URL
-from src.update_checker import check_github_update, UpdateInfo
+from src.update_checker import check_github_update, UpdateInfo, get_ssl_context
 from pynput import mouse
 import win32gui
 import win32con
@@ -642,7 +642,8 @@ class MainWindow(QMainWindow):
                 info.asset_download_url,
                 headers={"User-Agent": "ITM-AutoClicker-Updater"},
             )
-            with urllib.request.urlopen(request, timeout=30) as response:
+            ssl_context = get_ssl_context()
+            with urllib.request.urlopen(request, timeout=30, context=ssl_context) as response:
                 with open(download_path, "wb") as handle:
                     while True:
                         chunk = response.read(1024 * 256)

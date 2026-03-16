@@ -4,6 +4,7 @@ GitHub release update checker.
 from __future__ import annotations
 
 import json
+import ssl
 import urllib.request
 import urllib.error
 from dataclasses import dataclass
@@ -22,6 +23,15 @@ class UpdateInfo:
     asset_download_url: str = ""
     error: str = ""
     no_release: bool = False
+
+
+def get_ssl_context():
+    """Return SSL context with certifi bundle when available."""
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
 
 
 def _normalize_version(value: str) -> str:
@@ -62,7 +72,8 @@ def check_github_update(
         },
     )
     try:
-        with urllib.request.urlopen(request, timeout=8) as response:
+        ssl_context = get_ssl_context()
+        with urllib.request.urlopen(request, timeout=8, context=ssl_context) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         if int(exc.code) == 404:
