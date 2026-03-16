@@ -1,137 +1,69 @@
-# ITM AutoClicker 🖱️🤖
+﻿# ITM AutoClicker
 
-Ứng dụng **Auto Clicker** tiên tiến cho phép tự động hóa các thao tác click chuột mà không chiếm đụng chuột. Ứng dụng hỗ trợ hai chế độ recording: click theo vị trí và click theo hình ảnh.
+Ứng dụng tự động hóa thao tác trên **cửa sổ mục tiêu** (target window) bằng click chuột, kéo thả, phím tắt và OCR. README này dành cho **người dùng cuối**.
 
-## ✨ Tính Năng Chính
+## Tính năng chính
 
-### 1. **Click Theo Vị Trí**
-- Di chuyển chuột đến vị trí cần click
-- Ấn **PAGE UP** để ghi nhớ vị trí
-- Lặp lại cho nhiều vị trí
-- Ấn **ESC** để hoàn thành
+- **Click theo vị trí** (Position Based).
+- **Click theo hình ảnh**:
+  - **Image Based**: phát hiện ảnh rồi click tại vị trí đã ghi.
+  - **Image Direct**: phát hiện ảnh rồi click trực tiếp vào ảnh.
+- **Image Recognition (OCR)**: quét vùng ảnh và đọc chữ/số, cập nhật giá trị vào Details.
+- **Record screen action**: ghi thao tác chuột/phím trên màn hình và phát lại.
+- **Advanced actions** (toolbar kéo‑thả):
+  - Left/Right/Middle Click
+  - Scroll Up/Down
+  - Mouse Hold Left/Right
+  - Drag & Drop
+  - Key Press
+  - Hotkey
+  - Key Hold
+- **IF / IF NOT** dựa trên ảnh hoặc OCR để điều khiển luồng (chạy Branch/Action hoặc Stop).
+- **Branch & Action**: quản lý theo cây, kéo‑thả sắp xếp, chọn chạy theo nhánh.
+- **Không chiếm chuột** (background click) hoặc **dùng chuột thật** (tùy chọn trong Settings).
+- **Always on top** (tùy chọn).
+- **Update tự động** qua GitHub Releases.
+- **Floating panel** nhỏ khi chạy để không che màn hình (Start/Stop).
 
-### 2. **Click Theo Hình Ảnh**  
-- Kéo chuột để chọn vùng hình ảnh trên màn hình
-- Chương trình sẽ chụp lại khu vực đó
-- Xác nhận vị trí click
-- Lặp lại cho ảnh tiếp theo
+## Cách dùng nhanh
 
-### 3. **Thực Thi Kịch Bản**
-- Ấn nút **Start** hoặc phím **END** để bắt đầu
-- Chương trình tự động click lần lượt theo kịch bản
-- Kịch bản lặp lại liên tục
-- Ấn **Stop** hoặc **END** để dừng
+1. **Chọn Target Window** ở góc trên (Select Target).
+2. **Tạo Action** bằng các nút trên thanh công cụ:
+   - Record multi Action, Image Based, Image Direct, Image Recognition, Record screen action.
+   - Hoặc dùng thanh toolbar kéo‑thả để tạo action nhanh (chuột/phím/drag/scroll...).
+3. **Chọn/đổi Branch** nếu cần (Click Script List).
+4. **Start** để chạy, **Stop** để dừng.
+5. **Save Script** để lưu, **Load Script** để dùng lại.
 
-## 🚀 Cài Đặt Nhanh
+## Phím tắt (có thể đổi trong Settings)
 
-```bash
-# Clone project
-git clone https://github.com/quockhanh112hubt/ITM_AutoClicker.git
-cd ITM_AutoClicker
+- **Record Confirm**: mặc định `Page Up`
+- **Record Action Menu**: mặc định `Page Down`
+- **Start / Pause / Resume**: mặc định `Home`
+- **Stop**: mặc định `End`
+- **Record Screen Toggle**: mặc định `F10`
 
-# Tạo virtual environment
-python -m venv .venv
-.venv\Scripts\activate  # Windows
+## Image Recognition (OCR)
 
-# Cài đặt dependencies
-pip install -r requirements.txt
+- Chọn **Image Recognition** → khoanh vùng cần đọc → lưu action.
+- Khi chạy, chương trình sẽ cập nhật **giá trị OCR** vào cột Details.
+- Có thể dùng giá trị này trong **IF** để điều khiển luồng.
 
-# Chạy ứng dụng
-python main.py
-```
+## Ghi chú sử dụng
 
-## 📁 Cấu Trúc Project
+- Nếu target window bị đóng/minimize/che quá nhiều, một số thao tác có thể không chính xác.
+- Với Drag & Drop, chế độ **Real drag** sẽ chiếm chuột (đúng thao tác nhất).
+- Với chế độ **background click**, một số ứng dụng có thể không hỗ trợ đầy đủ.
 
-```
-ITM_AutoClicker/
-├── main.py                 # Entry point
-├── requirements.txt        # Dependencies
-├── src/
-│   ├── main_window.py      # GUI chính
-│   ├── click_script.py     # Quản lý kịch bản
-│   ├── keyboard_listener.py # Lắng nghe phím
-│   ├── auto_clicker.py     # Engine thực thi
-│   ├── image_matcher.py    # Template matching
-│   ├── region_selector.py  # Chọn vùng
-│   └── config.py           # Cấu hình
-├── scripts/                # Lưu kịch bản & ảnh
-└── config/                 # Cài đặt app
-```
+## Cập nhật (Update)
 
-## ⌨️ Phím Tắt Toàn Cục
+Trong tab **About**, bấm **Check for Update**. Nếu có bản mới, chương trình sẽ tải về và tự cập nhật.
 
-| Phím | Chức Năng |
-|------|-----------|
-| **PAGE UP** | Ghi vị trí / Xác nhận click |
-| **ESC** | Thoát chế độ recording |
-| **END** | Bắt đầu/Dừng thực thi |
+## Yêu cầu hệ thống
 
-## 📚 Hướng Dẫn Chi Tiết
-
-### Chế Độ Position-Based (Vị Trí)
-
-1. Nhấp **Add Action** → **Position Based Click**
-2. Di chuyển chuột đến vị trí mong muốn
-3. Ấn **PAGE UP** để ghi
-4. Lặp lại cho các vị trí khác
-5. Ấn **ESC** để hoàn thành
-
-### Chế Độ Image-Based (Hình Ảnh)
-
-1. Nhấp **Add Action** → **Image Based Click**
-2. **Kéo chuột** để chọn vùng chụp ảnh
-3. **Thả chuột** → Ảnh được lưu
-4. Di chuyển chuột đến vị trí click
-5. Ấn **PAGE UP** để xác nhận
-6. Chọn **Yes** để tiếp tục hoặc **No** để hoàn thành
-
-## ⚙️ Cài Đặt
-
-Trong tab **Settings**:
-- **Click Delay (ms)**: Độ trễ giữa các click
-- **Image Confidence**: Độ tin cậy template matching
-
-File cấu hình: `config/settings.json`
-
-## 🎮 Sử Dụng
-
-1. **Tạo kịch bản** bằng cách thêm các action
-2. **Nhấp Start** hoặc ấn **END** để chạy
-3. **Nhấp Stop** hoặc ấn **END** để dừng
-4. **Save Script** để lưu kịch bản
-5. **Load Script** để tải lại sau này
-
-## 🐛 Xử Lý Lỗi
-
-| Lỗi | Giải Pháp |
-|-----|----------|
-| Click không hoạt động | Chạy as Administrator |
-| Template không tìm | Tăng delay, kiểm tra ảnh rõ |
-| Phím không hoạt động | Khởi động lại app |
-
-## 📋 Yêu Cầu Hệ Thống
-
-- Python 3.8+
-- Windows 7+ / macOS 10.12+ / Linux
-- RAM: 512 MB+
-- Lưu trữ: 100 MB
-
-## 🔮 Tính Năng Sắp Tới
-
-- [ ] Click chuột phải/con lăn
-- [ ] Ghi video thao tác
-- [ ] Xử lý lỗi tự động
-- [ ] Giao diện English
-- [ ] Plugin system
-
-## 📝 Giấy Phép
-
-MIT License
-
-## 👤 Tác Giả
-
-**GitHub**: [@quockhanh112hubt](https://github.com/quockhanh112hubt)
+- Windows 10/11
+- Không cần cài thêm khi dùng file `.exe` đã build
 
 ---
 
-⚠️ **Lưu Ý**: Chỉ sử dụng cho mục đích cá nhân/học tập. Đảm bảo có quyền tự động hóa trên ứng dụng mà bạn sử dụng.
+Nếu cần hỗ trợ hoặc báo lỗi, vui lòng gửi kèm ảnh/chụp màn hình để mô tả rõ vấn đề.
