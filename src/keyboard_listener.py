@@ -159,6 +159,10 @@ class KeyboardListener(QObject):
         """Stop listening to keyboard events"""
         if self.listener is not None:
             self.listener.stop()
+            try:
+                self.listener.join(1.0)
+            except Exception:
+                pass
             self.listener = None
     
     def is_running(self) -> bool:

@@ -266,7 +266,8 @@ class MainWindow(QMainWindow):
     def _exit_application_from_tray(self):
         """Exit application fully from tray menu."""
         self._is_exiting = True
-        self.close()
+        self._shutdown_app(force_exit=True)
+        QApplication.instance().quit()
 
     def _on_tray_icon_activated(self, reason):
         """Toggle window on tray icon click."""
@@ -723,6 +724,8 @@ class MainWindow(QMainWindow):
         )
         latest = info.latest_version if isinstance(info, UpdateInfo) else ""
         self.statusBar.showMessage(f"Installing update {latest} and restarting...")
+        self._is_exiting = True
+        self._shutdown_app(force_exit=True)
         QTimer.singleShot(300, QApplication.instance().quit)
     
     def create_main_tab(self) -> QWidget:
@@ -756,6 +759,23 @@ class MainWindow(QMainWindow):
                 color: #1a2734;
                 border: 1px solid #cfd6df;
                 border-radius: 8px;
+            }
+            QTreeWidget::indicator {
+                width: 14px;
+                height: 14px;
+            }
+            QTreeWidget::indicator:unchecked {
+                border: 1px solid #7b8794;
+                border-radius: 3px;
+                background: #ffffff;
+            }
+            QTreeWidget::indicator:checked {
+                border: 1px solid #2f6fb2;
+                border-radius: 3px;
+                background: #4a90e2;
+            }
+            QTreeWidget::indicator:checked:hover {
+                background: #3b7fcf;
             }
             QHeaderView::section {
                 background: #eef3f8;
@@ -4807,15 +4827,28 @@ class MainWindow(QMainWindow):
             self._hide_to_tray()
             event.ignore()
             return
+        self._shutdown_app()
+        event.accept()
 
+    def _shutdown_app(self, force_exit: bool = False):
+        """Stop background threads and cleanup resources."""
         if self._screen_recording_active:
             self._stop_screen_recording()
         self._screen_record_elapsed_timer.stop()
-        self.keyboard_listener.stop()
-        self.auto_clicker.stop()
+        try:
+            self.keyboard_listener.stop()
+        except Exception:
+            pass
+        try:
+            self.auto_clicker.stop()
+        except Exception:
+            pass
         if self.tray_icon:
             self.tray_icon.hide()
-        event.accept()
+        if self._float_window is not None:
+            self._float_window.close()
+        if force_exit:
+            QTimer.singleShot(800, lambda: os._exit(0))
 
     def _create_floating_window(self):
         """Create floating Start/Stop panel."""
