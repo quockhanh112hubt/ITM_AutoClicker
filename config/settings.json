@@ -12,5 +12,7 @@
   "always_on_top": false,
   "hotkey_home": "home",
   "hotkey_record": "f10",
-  "ocr_language": "vie"
+  "ocr_language": "vie",
+  "speed_adjust_step_ms": 100,
+  "hotkey_float": "f9"
 }
