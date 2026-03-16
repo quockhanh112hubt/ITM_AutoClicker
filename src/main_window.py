@@ -723,6 +723,43 @@ class MainWindow(QMainWindow):
     def create_main_tab(self) -> QWidget:
         """Create main tab"""
         tab = QWidget()
+        tab.setStyleSheet(
+            """
+            QWidget {
+                background: #f7f9fc;
+                color: #1a2734;
+                font-family: "Segoe UI";
+            }
+            QLabel { background: transparent; color: #1a2734; }
+            QSpinBox, QComboBox, QLineEdit {
+                background: #ffffff;
+                color: #1a2734;
+                border: 1px solid #b8c4d1;
+                border-radius: 6px;
+                padding: 2px 6px;
+            }
+            QSpinBox::up-button, QSpinBox::down-button {
+                width: 14px;
+            }
+            QToolTip {
+                background: #1f2a36;
+                color: #f6f8fa;
+                border: 1px solid #3b4a5a;
+            }
+            QTreeWidget {
+                background: #ffffff;
+                color: #1a2734;
+                border: 1px solid #cfd6df;
+                border-radius: 8px;
+            }
+            QHeaderView::section {
+                background: #eef3f8;
+                color: #22303d;
+                border: 1px solid #d6dde6;
+                padding: 4px 6px;
+            }
+            """
+        )
         layout = QVBoxLayout()
 
         # Global target window selector
