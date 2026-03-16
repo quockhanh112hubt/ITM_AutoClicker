@@ -699,10 +699,13 @@ class MainWindow(QMainWindow):
             f"title {APP_NAME} Auto Update",
             "setlocal",
             f'cd /d "{app_dir}"',
+            "set \"LOG=update.log\"",
+            "echo [%date% %time%] Update started > \"%LOG%\"",
             f'set "TARGET={exe_name}"',
             f'set "NEWFILE={os.path.basename(new_path)}"',
             f'set "BACKUP={os.path.basename(backup_path)}"',
             "timeout /t 3 /nobreak >nul 2>&1",
+            "echo [%date% %time%] After wait >> \"%LOG%\"",
             "if not exist \"%NEWFILE%\" exit /b 1",
             "if exist \"%TARGET%\" (",
             "  del /f /q \"%TARGET%\" >nul 2>&1",
@@ -713,20 +716,25 @@ class MainWindow(QMainWindow):
             "if not exist \"%TARGET%\" exit /b 1",
             "set \"_PYI_ENTRY= \"",
             "set \"_PYI_APPLICATION_HOME_DIR= \"",
+            "set \"_PYI_PARENT_PROCESS_LEVEL= \"",
             "set \"PYTHONHOME= \"",
             "set \"PYTHONPATH= \"",
             "set \"PYTHONUTF8= \"",
             "set \"PYTHONIOENCODING= \"",
-            "start \"\" /i \"%TARGET%\"",
+            "set \"PYINSTALLER_RESET_ENVIRONMENT=1\"",
+            "echo [%date% %time%] Launching new exe >> \"%LOG%\"",
+            "start \"\" \"%TARGET%\"",
             "timeout /t 2 /nobreak >nul 2>&1",
+            "echo [%date% %time%] Cleanup >> \"%LOG%\"",
             "del /f /q \"%~f0\" >nul 2>&1",
+            "del /f /q \"%LOG%\" >nul 2>&1",
             "exit /b 0",
         ])
         with open(updater_bat, "w", encoding="utf-8", newline="\r\n") as handle:
             handle.write(script)
 
         subprocess.Popen(
-            ["cmd.exe", "/c", updater_bat],
+            f'cmd.exe /c start "" /min "{updater_bat}"',
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             cwd=app_dir,
         )
