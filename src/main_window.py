@@ -727,7 +727,6 @@ class MainWindow(QMainWindow):
             "timeout /t 2 /nobreak >nul 2>&1",
             "echo [%date% %time%] Cleanup >> \"%LOG%\"",
             "del /f /q \"%~f0\" >nul 2>&1",
-            "del /f /q \"%LOG%\" >nul 2>&1",
             "exit /b 0",
         ])
         with open(updater_bat, "w", encoding="utf-8", newline="\r\n") as handle:
