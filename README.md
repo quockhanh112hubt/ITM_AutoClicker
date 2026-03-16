@@ -1,6 +1,6 @@
 ﻿# ITM AutoClicker
 
-Ứng dụng tự động hóa thao tác trên **cửa sổ mục tiêu** (target window) bằng click chuột, kéo thả, phím tắt và OCR. README này dành cho **người dùng cuối**.
+Ứng dụng tự động hóa thao tác trên **cửa sổ mục tiêu** (target window) bằng click chuột, kéo thả, phím tắt và OCR.
 
 ## Tính năng chính
 
