@@ -139,9 +139,11 @@ class MainWindow(QMainWindow):
         self.keyboard_listener.set_binding('home', self.hotkey_bindings['home'])
         self.keyboard_listener.set_binding('end', self.hotkey_bindings['end'])
         self.keyboard_listener.set_binding('f10', self.hotkey_bindings['record'])
+        self.keyboard_listener.set_binding('f9', self.hotkey_bindings['float'])
         self.keyboard_listener.register_callback('home', self.on_home_hotkey_pressed)
         self.keyboard_listener.register_callback('end', self.on_end_hotkey_pressed)
         self.keyboard_listener.register_callback('f10', self.on_screen_record_hotkey_pressed)
+        self.keyboard_listener.register_callback('f9', self.on_float_hotkey_pressed)
         
         # Grouped scripts (branches)
         self.script_groups: list[dict] = []
@@ -816,7 +818,7 @@ class MainWindow(QMainWindow):
         self.btn_save_top.setToolTip("Save current script list to JSON file.")
         self.btn_float = QPushButton("Float")
         self.btn_float.clicked.connect(self._show_floating_window)
-        self.btn_float.setToolTip("Collapse to floating Start/Stop panel")
+        self.btn_float.setToolTip("Collapse to floating Start/Stop panel. Hotkey: F9")
         target_layout.addWidget(target_title)
         target_layout.addWidget(self.target_info_label)
         target_layout.addStretch()
@@ -866,7 +868,7 @@ class MainWindow(QMainWindow):
         self._apply_top_control_button_style()
         
         # Title
-        title = QLabel("Click Script List")
+        title = QLabel("Action Options")
         title_font = QFont()
         title_font.setPointSize(14)
         title_font.setBold(True)
@@ -1217,6 +1219,7 @@ class MainWindow(QMainWindow):
         self.ocr_language_combo.setFixedWidth(240)
         general_form.addRow(ocr_label, self.ocr_language_combo)
         general_layout.addLayout(general_form)
+        general_layout.addStretch(1)
 
         hotkey_card = QWidget()
         hotkey_card.setObjectName("SettingsCard")
@@ -1299,10 +1302,25 @@ class MainWindow(QMainWindow):
         )
         self.hotkey_record_combo.setFixedWidth(180)
         hotkey_form.addRow(hk_record_label, self.hotkey_record_combo)
+
+        hk_float_label = QLabel("Floating Panel Toggle:")
+        self.hotkey_float_combo = QComboBox()
+        self.hotkey_float_combo.addItems(self.hotkey_options)
+        float_text = self._to_hotkey_display(self.hotkey_bindings["float"])
+        if self.hotkey_float_combo.findText(float_text) < 0:
+            self.hotkey_float_combo.addItem(float_text)
+        self.hotkey_float_combo.setCurrentText(float_text)
+        self.hotkey_float_combo.currentTextChanged.connect(
+            lambda text: self.on_hotkey_changed("float", text)
+        )
+        self.hotkey_float_combo.setFixedWidth(180)
+        hotkey_form.addRow(hk_float_label, self.hotkey_float_combo)
         hotkey_layout.addLayout(hotkey_form)
+        hotkey_layout.addStretch(1)
 
         top_row = QHBoxLayout()
         top_row.setSpacing(14)
+        top_row.setAlignment(Qt.AlignmentFlag.AlignTop)
         top_row.addWidget(general_card, 1)
         top_row.addWidget(hotkey_card, 1)
         layout.addLayout(top_row)
@@ -1349,7 +1367,7 @@ class MainWindow(QMainWindow):
         )
         runtime_layout.addWidget(self.real_mouse_checkbox)
 
-        self.always_on_top_checkbox = QCheckBox("Always on top")
+        self.always_on_top_checkbox = QCheckBox("Main window always on top")
         self.always_on_top_checkbox.setChecked(bool(self._always_on_top_enabled))
         self.always_on_top_checkbox.toggled.connect(self.on_always_on_top_changed)
         self.always_on_top_checkbox.setToolTip(
@@ -3518,6 +3536,7 @@ class MainWindow(QMainWindow):
             "home": str(self.config.get("hotkey_home", "home")),
             "end": str(self.config.get("hotkey_end", "end")),
             "record": str(self.config.get("hotkey_record", "f10")),
+            "float": str(self.config.get("hotkey_float", "f9")),
         }
         return bindings
 
@@ -3528,6 +3547,11 @@ class MainWindow(QMainWindow):
             self.btn_tool_record_screen.setToolTip(
                 "Record all keyboard/mouse actions on screen.\n"
                 f"Press {key_text} to start recording, press {key_text} again to stop."
+            )
+        if self.btn_float:
+            float_text = self._to_hotkey_display(self.hotkey_bindings.get("float", "f9"))
+            self.btn_float.setToolTip(
+                f"Collapse to floating Start/Stop panel. Hotkey: {float_text}"
             )
     
     def _get_recording_hotkeys(self) -> dict:
@@ -3891,7 +3915,7 @@ class MainWindow(QMainWindow):
         self.config.set("always_on_top", self._always_on_top_enabled)
         self._apply_always_on_top_to_main()
         self.statusBar.showMessage(
-            "Always on top enabled" if self._always_on_top_enabled else "Always on top disabled"
+            "Main window always on top enabled" if self._always_on_top_enabled else "Main window always on top disabled"
         )
     
     def on_hotkey_changed(self, logical_key: str, display_value: str):
@@ -3915,6 +3939,7 @@ class MainWindow(QMainWindow):
                     "home": self.hotkey_home_combo,
                     "end": self.hotkey_end_combo,
                     "record": self.hotkey_record_combo,
+                    "float": self.hotkey_float_combo,
                 }.get(logical_key)
                 if combo:
                     combo.setCurrentText(self._to_hotkey_display(self.hotkey_bindings[logical_key]))
@@ -3934,6 +3959,12 @@ class MainWindow(QMainWindow):
         if logical_key == "record":
             self.keyboard_listener.set_binding("f10", key_token)
             self._update_record_hotkey_ui()
+        if logical_key == "float":
+            self.keyboard_listener.set_binding("f9", key_token)
+            if self.btn_float:
+                self.btn_float.setToolTip(
+                    f"Collapse to floating Start/Stop panel. Hotkey: {self._to_hotkey_display(key_token)}"
+                )
         self.statusBar.showMessage(f"Hotkey {logical_key} set to {self._to_hotkey_display(key_token)}")
     
     def on_status_changed(self, message: str):
@@ -4934,6 +4965,13 @@ class MainWindow(QMainWindow):
         self.showNormal()
         self.raise_()
         self.activateWindow()
+
+    def on_float_hotkey_pressed(self):
+        """Toggle floating panel with F9."""
+        if self._floating_visible:
+            self._restore_from_floating()
+        else:
+            self._show_floating_window()
 
 
 def main():
