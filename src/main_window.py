@@ -216,6 +216,36 @@ class MainWindow(QMainWindow):
         
         # Tab widget
         self.tabs = QTabWidget()
+        self.tabs.setStyleSheet(
+            """
+            QTabWidget::pane {
+                border: 1px solid #d6dde6;
+                background: #f7f9fc;
+                border-radius: 8px;
+                top: -1px;
+            }
+            QTabBar::tab {
+                background: #e9eef5;
+                color: #233142;
+                border: 1px solid #c8d1dc;
+                border-bottom: none;
+                padding: 6px 14px;
+                margin-right: 4px;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+                min-width: 60px;
+            }
+            QTabBar::tab:selected {
+                background: #ffffff;
+                color: #111c2a;
+                border-bottom: 1px solid #ffffff;
+                font-weight: 700;
+            }
+            QTabBar::tab:hover {
+                background: #f2f6fb;
+            }
+            """
+        )
         
         # Tab 1: Main
         main_tab = self.create_main_tab()
@@ -245,40 +275,40 @@ class MainWindow(QMainWindow):
         tab.setStyleSheet(
             """
             QWidget {
-                background: #f6f8fb;
-                color: #1f2a35;
+                background: #f7f9fc;
+                color: #1a2734;
+                font-family: "Segoe UI";
             }
-            QLabel {
-                background: transparent;
-            }
+            QLabel { background: transparent; }
             QLabel#AboutHeroTitle {
-                font-size: 22px;
+                font-size: 24px;
                 font-weight: 700;
-                color: #1f2a35;
+                color: #122236;
             }
             QLabel#AboutHeroSubtitle {
-                color: #506070;
+                color: #5c6b7a;
                 font-size: 12px;
             }
             QWidget#AboutCard {
                 background: #ffffff;
-                border: 1px solid #d5dbe3;
-                border-radius: 10px;
+                border: 1px solid #d3dce7;
+                border-radius: 12px;
             }
             QLabel#AboutSectionTitle {
                 font-size: 13px;
                 font-weight: 700;
-                color: #243241;
+                color: #203246;
             }
             QPushButton#PrimaryAboutButton {
                 min-height: 34px;
-                padding: 4px 14px;
+                padding: 6px 16px;
                 border-radius: 8px;
-                border: 1px solid #2f8f46;
-                background: #41b35b;
-                color: white;
+                border: 1px solid #1f7a4a;
+                background: #2e9f5f;
+                color: #ffffff;
                 font-weight: 700;
             }
+            QPushButton#PrimaryAboutButton:hover { background: #2aa258; }
             QPushButton#PrimaryAboutButton:disabled {
                 background: #bfc7cf;
                 border-color: #a9b1b9;
@@ -927,41 +957,46 @@ class MainWindow(QMainWindow):
         tab.setStyleSheet(
             """
             QWidget {
-                background: #f6f8fb;
-                color: #1f2a35;
+                background: #f7f9fc;
+                color: #1a2734;
+                font-family: "Segoe UI";
             }
-            QLabel {
-                background: transparent;
-            }
-            QSpinBox, QComboBox, QLineEdit {
-                background: #ffffff;
-                color: #1f2a35;
-                border: 1px solid #b7c1cb;
-                border-radius: 6px;
-                padding: 2px 6px;
-                min-height: 22px;
-            }
-            QCheckBox {
-                color: #1f2a35;
-            }
-            QWidget#SettingsCard {
-                background: #ffffff;
-                border: 1px solid #d5dbe3;
-                border-radius: 10px;
-            }
+            QLabel { background: transparent; }
             QLabel#SettingsTitle {
-                font-size: 22px;
+                font-size: 24px;
                 font-weight: 700;
-                color: #1f2a35;
+                color: #122236;
             }
             QLabel#SettingsSubtitle {
                 font-size: 12px;
-                color: #607182;
+                color: #5c6b7a;
             }
             QLabel#SettingsSectionTitle {
                 font-size: 13px;
                 font-weight: 700;
-                color: #243241;
+                color: #203246;
+            }
+            QWidget#SettingsCard {
+                background: #ffffff;
+                border: 1px solid #d3dce7;
+                border-radius: 12px;
+            }
+            QSpinBox, QComboBox, QLineEdit {
+                background: #ffffff;
+                color: #1a2734;
+                border: 1px solid #b9c4d1;
+                border-radius: 8px;
+                padding: 4px 8px;
+                min-height: 26px;
+            }
+            QSpinBox:hover, QComboBox:hover, QLineEdit:hover {
+                border: 1px solid #8fb3d9;
+            }
+            QSpinBox:focus, QComboBox:focus, QLineEdit:focus {
+                border: 1px solid #5aa2e3;
+            }
+            QCheckBox {
+                color: #1a2734;
             }
             """
         )
@@ -986,20 +1021,21 @@ class MainWindow(QMainWindow):
         general_title.setObjectName("SettingsSectionTitle")
         general_layout.addWidget(general_title)
 
-        delay_layout = QHBoxLayout()
+        general_form = QFormLayout()
+        general_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        general_form.setFormAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        general_form.setHorizontalSpacing(12)
+        general_form.setVerticalSpacing(10)
+
         delay_label = QLabel("Click Delay (ms):")
         self.delay_spinbox = QSpinBox()
         self.delay_spinbox.setMinimum(0)
         self.delay_spinbox.setMaximum(10000)
         self.delay_spinbox.setValue(self.config.get("click_delay_ms", 100))
         self.delay_spinbox.valueChanged.connect(self.on_delay_changed)
-        
-        delay_layout.addWidget(delay_label)
-        delay_layout.addWidget(self.delay_spinbox)
-        delay_layout.addStretch()
-        general_layout.addLayout(delay_layout)
+        self.delay_spinbox.setFixedWidth(120)
+        general_form.addRow(delay_label, self.delay_spinbox)
 
-        speed_step_layout = QHBoxLayout()
         speed_step_label = QLabel("Speed Adjust Step (ms):")
         self.speed_step_spinbox = QSpinBox()
         self.speed_step_spinbox.setMinimum(1)
@@ -1009,25 +1045,18 @@ class MainWindow(QMainWindow):
         self.speed_step_spinbox.setToolTip(
             "Amount of delay changed by Speed Up / Slow Down buttons."
         )
-        speed_step_layout.addWidget(speed_step_label)
-        speed_step_layout.addWidget(self.speed_step_spinbox)
-        speed_step_layout.addStretch()
-        general_layout.addLayout(speed_step_layout)
+        self.speed_step_spinbox.setFixedWidth(120)
+        general_form.addRow(speed_step_label, self.speed_step_spinbox)
 
-        priority_layout = QHBoxLayout()
         priority_label = QLabel("Priority Cooldown (ms):")
         self.priority_cooldown_spinbox = QSpinBox()
         self.priority_cooldown_spinbox.setMinimum(0)
         self.priority_cooldown_spinbox.setMaximum(60000)
         self.priority_cooldown_spinbox.setValue(self.config.get("priority_cooldown_ms", 800))
         self.priority_cooldown_spinbox.valueChanged.connect(self.on_priority_cooldown_changed)
-        
-        priority_layout.addWidget(priority_label)
-        priority_layout.addWidget(self.priority_cooldown_spinbox)
-        priority_layout.addStretch()
-        general_layout.addLayout(priority_layout)
+        self.priority_cooldown_spinbox.setFixedWidth(120)
+        general_form.addRow(priority_label, self.priority_cooldown_spinbox)
 
-        ocr_layout = QHBoxLayout()
         ocr_label = QLabel("OCR Language:")
         self.ocr_language_combo = QComboBox()
         self.ocr_language_combo.addItem("English + Vietnamese (eng+vie)", "eng+vie")
@@ -1044,11 +1073,98 @@ class MainWindow(QMainWindow):
             "Tesseract language code used by Image Recognition.\n"
             "For Vietnamese, make sure vie.traineddata exists in tessdata."
         )
-        ocr_layout.addWidget(ocr_label)
-        ocr_layout.addWidget(self.ocr_language_combo)
-        ocr_layout.addStretch()
-        general_layout.addLayout(ocr_layout)
-        layout.addWidget(general_card)
+        self.ocr_language_combo.setFixedWidth(240)
+        general_form.addRow(ocr_label, self.ocr_language_combo)
+        general_layout.addLayout(general_form)
+
+        hotkey_card = QWidget()
+        hotkey_card.setObjectName("SettingsCard")
+        hotkey_layout = QVBoxLayout(hotkey_card)
+        hotkey_layout.setContentsMargins(18, 16, 18, 16)
+        hotkey_layout.setSpacing(10)
+        hotkey_title = QLabel("Hotkeys")
+        hotkey_title.setObjectName("SettingsSectionTitle")
+        hotkey_layout.addWidget(hotkey_title)
+
+        self.hotkey_options = self._build_hotkey_options()
+
+        hotkey_form = QFormLayout()
+        hotkey_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        hotkey_form.setFormAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        hotkey_form.setHorizontalSpacing(12)
+        hotkey_form.setVerticalSpacing(10)
+
+        hk_confirm_label = QLabel("Record Confirm (PAGE UP):")
+        self.hotkey_page_up_combo = QComboBox()
+        self.hotkey_page_up_combo.addItems(self.hotkey_options)
+        page_up_text = self._to_hotkey_display(self.hotkey_bindings["page_up"])
+        if self.hotkey_page_up_combo.findText(page_up_text) < 0:
+            self.hotkey_page_up_combo.addItem(page_up_text)
+        self.hotkey_page_up_combo.setCurrentText(page_up_text)
+        self.hotkey_page_up_combo.currentTextChanged.connect(
+            lambda text: self.on_hotkey_changed("page_up", text)
+        )
+        self.hotkey_page_up_combo.setFixedWidth(180)
+        hotkey_form.addRow(hk_confirm_label, self.hotkey_page_up_combo)
+        
+        hk_action_label = QLabel("Record Action Menu (PAGE DOWN):")
+        self.hotkey_page_down_combo = QComboBox()
+        self.hotkey_page_down_combo.addItems(self.hotkey_options)
+        page_down_text = self._to_hotkey_display(self.hotkey_bindings["page_down"])
+        if self.hotkey_page_down_combo.findText(page_down_text) < 0:
+            self.hotkey_page_down_combo.addItem(page_down_text)
+        self.hotkey_page_down_combo.setCurrentText(page_down_text)
+        self.hotkey_page_down_combo.currentTextChanged.connect(
+            lambda text: self.on_hotkey_changed("page_down", text)
+        )
+        self.hotkey_page_down_combo.setFixedWidth(180)
+        hotkey_form.addRow(hk_action_label, self.hotkey_page_down_combo)
+        
+        hk_home_label = QLabel("Start/Pause/Resume (HOME):")
+        self.hotkey_home_combo = QComboBox()
+        self.hotkey_home_combo.addItems(self.hotkey_options)
+        home_text = self._to_hotkey_display(self.hotkey_bindings["home"])
+        if self.hotkey_home_combo.findText(home_text) < 0:
+            self.hotkey_home_combo.addItem(home_text)
+        self.hotkey_home_combo.setCurrentText(home_text)
+        self.hotkey_home_combo.currentTextChanged.connect(
+            lambda text: self.on_hotkey_changed("home", text)
+        )
+        self.hotkey_home_combo.setFixedWidth(180)
+        hotkey_form.addRow(hk_home_label, self.hotkey_home_combo)
+
+        hk_stop_label = QLabel("Stop (END):")
+        self.hotkey_end_combo = QComboBox()
+        self.hotkey_end_combo.addItems(self.hotkey_options)
+        end_text = self._to_hotkey_display(self.hotkey_bindings["end"])
+        if self.hotkey_end_combo.findText(end_text) < 0:
+            self.hotkey_end_combo.addItem(end_text)
+        self.hotkey_end_combo.setCurrentText(end_text)
+        self.hotkey_end_combo.currentTextChanged.connect(
+            lambda text: self.on_hotkey_changed("end", text)
+        )
+        self.hotkey_end_combo.setFixedWidth(180)
+        hotkey_form.addRow(hk_stop_label, self.hotkey_end_combo)
+
+        hk_record_label = QLabel("Record Screen Toggle:")
+        self.hotkey_record_combo = QComboBox()
+        self.hotkey_record_combo.addItems(self.hotkey_options)
+        record_text = self._to_hotkey_display(self.hotkey_bindings["record"])
+        if self.hotkey_record_combo.findText(record_text) < 0:
+            self.hotkey_record_combo.addItem(record_text)
+        self.hotkey_record_combo.setCurrentText(record_text)
+        self.hotkey_record_combo.currentTextChanged.connect(
+            lambda text: self.on_hotkey_changed("record", text)
+        )
+        self.hotkey_record_combo.setFixedWidth(180)
+        hotkey_form.addRow(hk_record_label, self.hotkey_record_combo)
+        hotkey_layout.addLayout(hotkey_form)
+
+        top_row = QHBoxLayout()
+        top_row.setSpacing(14)
+        top_row.addWidget(general_card, 1)
+        top_row.addWidget(hotkey_card, 1)
+        layout.addLayout(top_row)
 
         runtime_card = QWidget()
         runtime_card.setObjectName("SettingsCard")
@@ -1059,7 +1175,12 @@ class MainWindow(QMainWindow):
         runtime_title.setObjectName("SettingsSectionTitle")
         runtime_layout.addWidget(runtime_title)
 
-        drag_layout = QHBoxLayout()
+        runtime_form = QFormLayout()
+        runtime_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        runtime_form.setFormAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        runtime_form.setHorizontalSpacing(12)
+        runtime_form.setVerticalSpacing(10)
+
         drag_label = QLabel("Drag Mode (target window):")
         self.drag_mode_combo = QComboBox()
         self.drag_mode_combo.addItem("Hybrid (Background first)")
@@ -1073,12 +1194,10 @@ class MainWindow(QMainWindow):
         else:
             self.drag_mode_combo.setCurrentIndex(0)
         self.drag_mode_combo.currentIndexChanged.connect(self.on_drag_mode_changed)
-        drag_layout.addWidget(drag_label)
-        drag_layout.addWidget(self.drag_mode_combo)
-        drag_layout.addStretch()
-        runtime_layout.addLayout(drag_layout)
+        self.drag_mode_combo.setFixedWidth(240)
+        runtime_form.addRow(drag_label, self.drag_mode_combo)
+        runtime_layout.addLayout(runtime_form)
 
-        mouse_mode_layout = QHBoxLayout()
         self.real_mouse_checkbox = QCheckBox("Use real mouse for all actions (occupy mouse)")
         self.real_mouse_checkbox.setChecked(bool(self.config.get("use_real_mouse", False)))
         self.real_mouse_checkbox.toggled.connect(self.on_use_real_mouse_changed)
@@ -1087,113 +1206,16 @@ class MainWindow(QMainWindow):
             "Best compatibility for apps that ignore background input,\n"
             "but it will occupy your mouse during execution."
         )
-        mouse_mode_layout.addWidget(self.real_mouse_checkbox)
-        mouse_mode_layout.addStretch()
-        runtime_layout.addLayout(mouse_mode_layout)
+        runtime_layout.addWidget(self.real_mouse_checkbox)
 
-        ontop_layout = QHBoxLayout()
         self.always_on_top_checkbox = QCheckBox("Always on top")
         self.always_on_top_checkbox.setChecked(bool(self._always_on_top_enabled))
         self.always_on_top_checkbox.toggled.connect(self.on_always_on_top_changed)
         self.always_on_top_checkbox.setToolTip(
             "Keep main window and child dialogs above other windows."
         )
-        ontop_layout.addWidget(self.always_on_top_checkbox)
-        ontop_layout.addStretch()
-        runtime_layout.addLayout(ontop_layout)
+        runtime_layout.addWidget(self.always_on_top_checkbox)
         layout.addWidget(runtime_card)
-
-        hotkey_card = QWidget()
-        hotkey_card.setObjectName("SettingsCard")
-        hotkey_layout = QVBoxLayout(hotkey_card)
-        hotkey_layout.setContentsMargins(18, 16, 18, 16)
-        hotkey_layout.setSpacing(10)
-        hotkey_title = QLabel("Hotkeys")
-        hotkey_title.setObjectName("SettingsSectionTitle")
-        hotkey_layout.addWidget(hotkey_title)
-
-        self.hotkey_options = self._build_hotkey_options()
-
-        hk_confirm_layout = QHBoxLayout()
-        hk_confirm_label = QLabel("Record Confirm (PAGE UP):")
-        self.hotkey_page_up_combo = QComboBox()
-        self.hotkey_page_up_combo.addItems(self.hotkey_options)
-        page_up_text = self._to_hotkey_display(self.hotkey_bindings["page_up"])
-        if self.hotkey_page_up_combo.findText(page_up_text) < 0:
-            self.hotkey_page_up_combo.addItem(page_up_text)
-        self.hotkey_page_up_combo.setCurrentText(page_up_text)
-        self.hotkey_page_up_combo.currentTextChanged.connect(
-            lambda text: self.on_hotkey_changed("page_up", text)
-        )
-        hk_confirm_layout.addWidget(hk_confirm_label)
-        hk_confirm_layout.addWidget(self.hotkey_page_up_combo)
-        hk_confirm_layout.addStretch()
-        hotkey_layout.addLayout(hk_confirm_layout)
-        
-        hk_action_layout = QHBoxLayout()
-        hk_action_label = QLabel("Record Action Menu (PAGE DOWN):")
-        self.hotkey_page_down_combo = QComboBox()
-        self.hotkey_page_down_combo.addItems(self.hotkey_options)
-        page_down_text = self._to_hotkey_display(self.hotkey_bindings["page_down"])
-        if self.hotkey_page_down_combo.findText(page_down_text) < 0:
-            self.hotkey_page_down_combo.addItem(page_down_text)
-        self.hotkey_page_down_combo.setCurrentText(page_down_text)
-        self.hotkey_page_down_combo.currentTextChanged.connect(
-            lambda text: self.on_hotkey_changed("page_down", text)
-        )
-        hk_action_layout.addWidget(hk_action_label)
-        hk_action_layout.addWidget(self.hotkey_page_down_combo)
-        hk_action_layout.addStretch()
-        hotkey_layout.addLayout(hk_action_layout)
-        
-        hk_home_layout = QHBoxLayout()
-        hk_home_label = QLabel("Start/Pause/Resume (HOME):")
-        self.hotkey_home_combo = QComboBox()
-        self.hotkey_home_combo.addItems(self.hotkey_options)
-        home_text = self._to_hotkey_display(self.hotkey_bindings["home"])
-        if self.hotkey_home_combo.findText(home_text) < 0:
-            self.hotkey_home_combo.addItem(home_text)
-        self.hotkey_home_combo.setCurrentText(home_text)
-        self.hotkey_home_combo.currentTextChanged.connect(
-            lambda text: self.on_hotkey_changed("home", text)
-        )
-        hk_home_layout.addWidget(hk_home_label)
-        hk_home_layout.addWidget(self.hotkey_home_combo)
-        hk_home_layout.addStretch()
-        hotkey_layout.addLayout(hk_home_layout)
-
-        hk_stop_layout = QHBoxLayout()
-        hk_stop_label = QLabel("Stop (END):")
-        self.hotkey_end_combo = QComboBox()
-        self.hotkey_end_combo.addItems(self.hotkey_options)
-        end_text = self._to_hotkey_display(self.hotkey_bindings["end"])
-        if self.hotkey_end_combo.findText(end_text) < 0:
-            self.hotkey_end_combo.addItem(end_text)
-        self.hotkey_end_combo.setCurrentText(end_text)
-        self.hotkey_end_combo.currentTextChanged.connect(
-            lambda text: self.on_hotkey_changed("end", text)
-        )
-        hk_stop_layout.addWidget(hk_stop_label)
-        hk_stop_layout.addWidget(self.hotkey_end_combo)
-        hk_stop_layout.addStretch()
-        hotkey_layout.addLayout(hk_stop_layout)
-
-        hk_record_layout = QHBoxLayout()
-        hk_record_label = QLabel("Record Screen Toggle:")
-        self.hotkey_record_combo = QComboBox()
-        self.hotkey_record_combo.addItems(self.hotkey_options)
-        record_text = self._to_hotkey_display(self.hotkey_bindings["record"])
-        if self.hotkey_record_combo.findText(record_text) < 0:
-            self.hotkey_record_combo.addItem(record_text)
-        self.hotkey_record_combo.setCurrentText(record_text)
-        self.hotkey_record_combo.currentTextChanged.connect(
-            lambda text: self.on_hotkey_changed("record", text)
-        )
-        hk_record_layout.addWidget(hk_record_label)
-        hk_record_layout.addWidget(self.hotkey_record_combo)
-        hk_record_layout.addStretch()
-        hotkey_layout.addLayout(hk_record_layout)
-        layout.addWidget(hotkey_card)
 
         layout.addStretch()
         tab.setLayout(layout)

@@ -1,9 +1,11 @@
 {
-  "click_delay_ms": 400,
+  "click_delay_ms": 100,
   "priority_cooldown_ms": 100,
   "image_confidence": 0.8,
   "auto_save": true,
   "last_script": null,
+  "auto_check_updates": true,
+  "github_repo": "quockhanh112hubt/ITM_AutoClicker",
   "hotkey_end": "end",
   "drag_mode": "real",
   "use_real_mouse": false,
