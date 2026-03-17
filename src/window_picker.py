@@ -74,6 +74,7 @@ class WindowPicker:
 
 class WindowPickerDialog(QDialog):
     """Dialog to select target window"""
+    FULL_SCREEN_CLASS = "FULL_SCREEN"
     
     window_selected = pyqtSignal(Window)
     
@@ -135,6 +136,10 @@ class WindowPickerDialog(QDialog):
     def refresh_windows(self):
         """Refresh the list of windows"""
         self.window_list.clear()
+        full_screen = Window(0, "Full Screen (All Displays)", self.FULL_SCREEN_CLASS)
+        fs_item = QListWidgetItem(full_screen.get_display_name())
+        fs_item.setData(Qt.ItemDataRole.UserRole, full_screen)
+        self.window_list.addItem(fs_item)
         windows = WindowPicker.get_windows()
         AppLogger.debug(f"Found {len(windows)} windows")
         

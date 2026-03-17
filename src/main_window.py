@@ -35,6 +35,7 @@ from src.update_checker import check_github_update, UpdateInfo, get_ssl_context
 from pynput import mouse
 import win32gui
 import win32con
+import win32api
 
 
 class FloatingPanel(QWidget):
@@ -186,6 +187,7 @@ class MainWindow(QMainWindow):
         self.update_download_completed_signal.connect(self._on_update_download_completed_main_thread)
         self._ensure_default_group()
         self._always_on_top_enabled = bool(self.config.get("always_on_top", False))
+        self._full_screen_target = False
         self._about_tab_index: int | None = None
         self._update_check_in_progress = False
         self._update_download_in_progress = False
@@ -1773,8 +1775,7 @@ class MainWindow(QMainWindow):
         if branch_index is None:
             branch_index = self._get_selected_branch_index(require_selection=False)
 
-        target_hwnd = int(self.selected_target_window.hwnd) if self.selected_target_window else None
-        target_title = self.selected_target_window.title if self.selected_target_window else ""
+        target_hwnd, target_title = self._current_target_info()
         added_count = 0
         for payload in recorded_actions:
             try:
@@ -1930,11 +1931,7 @@ class MainWindow(QMainWindow):
         """Handle position recording cancelled"""
         if positions:
             default_delay_ms = int(self.config.get("click_delay_ms", 100))
-            target_hwnd = None
-            target_title = ""
-            if self.selected_target_window:
-                target_hwnd = int(self.selected_target_window.hwnd)
-                target_title = self.selected_target_window.title
+            target_hwnd, target_title = self._current_target_info()
             
             for pos in positions:
                 if isinstance(pos, dict):
@@ -2040,8 +2037,7 @@ class MainWindow(QMainWindow):
             return
 
         default_delay_ms = int(self.config.get("click_delay_ms", 100))
-        target_hwnd = int(self.selected_target_window.hwnd) if self.selected_target_window else None
-        target_title = self.selected_target_window.title if self.selected_target_window else ""
+        target_hwnd, target_title = self._current_target_info()
 
         payload = {
             "x": int(drop_x),
@@ -4535,8 +4531,13 @@ class MainWindow(QMainWindow):
         if not selected:
             self.statusBar.showMessage("No target window selected")
             return
+
+        if getattr(selected, "class_name", "") == WindowPickerDialog.FULL_SCREEN_CLASS:
+            self._set_full_screen_target()
+            return
         
         self.selected_target_window = selected
+        self._full_screen_target = False
         self.on_refresh_target_geometry()
         self._update_target_label()
         self.statusBar.showMessage(f"Target selected: {selected.title}")
@@ -4549,7 +4550,7 @@ class MainWindow(QMainWindow):
             self.statusBar.showMessage("Cannot detect window at drop position")
             return
         if not hwnd:
-            self.statusBar.showMessage("No window detected at drop position")
+            self._set_full_screen_target()
             return
 
         try:
@@ -4570,22 +4571,42 @@ class MainWindow(QMainWindow):
 
         try:
             if not win32gui.IsWindow(int(root_hwnd)):
-                self.statusBar.showMessage("Dropped window is not valid")
+                self._set_full_screen_target()
                 return
             title = win32gui.GetWindowText(int(root_hwnd)) or "Untitled"
             class_name = win32gui.GetClassName(int(root_hwnd))
+            if class_name in ("Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd") or not title.strip():
+                self._set_full_screen_target()
+                return
             self.selected_target_window = Window(int(root_hwnd), str(title), str(class_name))
+            self._full_screen_target = False
             self.on_refresh_target_geometry()
             self._update_target_label()
             self.statusBar.showMessage(f"Target selected by drag: {title}")
         except Exception as e:
             self.statusBar.showMessage(f"Failed to select target by drag: {e}")
+
+    def _set_full_screen_target(self):
+        """Enable full-screen targeting (no specific window)."""
+        self.selected_target_window = None
+        self._full_screen_target = True
+        self.on_refresh_target_geometry()
+        self._update_target_label()
+        self.statusBar.showMessage("Target selected: Full Screen")
     
     def _update_target_label(self):
         """Update target info label in main tab"""
         if not self.target_info_label:
             return
-        
+        if self._full_screen_target:
+            rect = self._get_full_screen_rect()
+            if rect:
+                x, y, w, h = rect
+                self.target_info_label.setText(f"Full Screen [{x}, {y}, {w}x{h}]")
+            else:
+                self.target_info_label.setText("Full Screen")
+            return
+
         if self.selected_target_window:
             info = f"{self.selected_target_window.title} (hwnd={self.selected_target_window.hwnd})"
             rect = self._get_target_window_rect()
@@ -4595,9 +4616,19 @@ class MainWindow(QMainWindow):
             self.target_info_label.setText(info)
         else:
             self.target_info_label.setText("Not selected")
+
+    def _current_target_info(self) -> tuple[int | None, str]:
+        """Get current target hwnd/title, honoring full screen mode."""
+        if self._full_screen_target:
+            return None, "Full Screen"
+        if self.selected_target_window:
+            return int(self.selected_target_window.hwnd), self.selected_target_window.title
+        return None, ""
     
     def _ensure_target_selected(self) -> bool:
         """Ensure a global target window is selected"""
+        if self._full_screen_target:
+            return True
         if self.selected_target_window:
             try:
                 if win32gui.IsWindow(int(self.selected_target_window.hwnd)):
@@ -4614,6 +4645,8 @@ class MainWindow(QMainWindow):
 
     def _get_target_window_rect(self) -> tuple[int, int, int, int] | None:
         """Get target window rect as (x, y, w, h)."""
+        if self._full_screen_target:
+            return self._get_full_screen_rect()
         if not self.selected_target_window:
             return None
         try:
@@ -4624,6 +4657,17 @@ class MainWindow(QMainWindow):
             width = max(0, int(right - left))
             height = max(0, int(bottom - top))
             return int(left), int(top), int(width), int(height)
+        except Exception:
+            return None
+
+    def _get_full_screen_rect(self) -> tuple[int, int, int, int] | None:
+        """Get virtual screen rect for all displays."""
+        try:
+            x = int(win32api.GetSystemMetrics(win32con.SM_XVIRTUALSCREEN))
+            y = int(win32api.GetSystemMetrics(win32con.SM_YVIRTUALSCREEN))
+            w = int(win32api.GetSystemMetrics(win32con.SM_CXVIRTUALSCREEN))
+            h = int(win32api.GetSystemMetrics(win32con.SM_CYVIRTUALSCREEN))
+            return x, y, w, h
         except Exception:
             return None
 
@@ -4643,10 +4687,16 @@ class MainWindow(QMainWindow):
         if self.target_h_spin:
             self.target_h_spin.setValue(int(h))
         self._update_target_label()
-        self.statusBar.showMessage(f"Target geometry refreshed: ({x}, {y}, {w}x{h})")
+        label = "Target geometry refreshed"
+        if self._full_screen_target:
+            label = "Full Screen geometry refreshed"
+        self.statusBar.showMessage(f"{label}: ({x}, {y}, {w}x{h})")
 
     def on_fix_target_geometry(self):
         """Apply X/Y/W/H controls to target window."""
+        if self._full_screen_target:
+            self.statusBar.showMessage("Full Screen target does not support Fix.")
+            return
         if not self.selected_target_window:
             self.statusBar.showMessage("Please select target window first.")
             return
@@ -4671,6 +4721,13 @@ class MainWindow(QMainWindow):
 
     def _build_target_window_payload(self) -> dict | None:
         """Build target-window metadata for script save."""
+        if self._full_screen_target:
+            rect = self._get_full_screen_rect()
+            payload = {"full_screen": True}
+            if rect:
+                x, y, w, h = rect
+                payload.update({"x": x, "y": y, "width": w, "height": h})
+            return payload
         if not self.selected_target_window:
             return None
         payload = {
@@ -4695,6 +4752,10 @@ class MainWindow(QMainWindow):
         """Restore target-window metadata from loaded script."""
         target_data = data.get("target_window") if isinstance(data, dict) else None
         if not isinstance(target_data, dict):
+            return
+
+        if target_data.get("full_screen"):
+            self._set_full_screen_target()
             return
 
         hwnd = target_data.get("hwnd")
@@ -4773,11 +4834,23 @@ class MainWindow(QMainWindow):
     
     def _apply_selected_target_to_actions(self):
         """Apply selected target to all actions before Start."""
+        if self._full_screen_target:
+            target_hwnd = None
+            target_title = "Full Screen"
+            for group in self.script_groups:
+                for entry in group.get("actions", []):
+                    action = entry.get("action")
+                    if not isinstance(action, ClickAction):
+                        continue
+                    action.data["target_hwnd"] = None
+                    action.data["target_title"] = target_title
+            return
         if not self.selected_target_window:
             return
         
-        target_hwnd = int(self.selected_target_window.hwnd)
-        target_title = self.selected_target_window.title
+        target_hwnd, target_title = self._current_target_info()
+        if target_hwnd is None:
+            return
         
         for group in self.script_groups:
             for entry in group.get("actions", []):
