@@ -3,6 +3,7 @@ Configuration manager for the application
 """
 import json
 import os
+import sys
 from typing import Any, Dict
 from src.logger import AppLogger
 from src.constants import (
@@ -28,7 +29,11 @@ class Config:
     def __init__(self, config_file: str = CONFIG_FILE_PATH) -> None:
         # Convert to absolute path if relative
         if not os.path.isabs(config_file):
-            config_file = os.path.join(os.path.dirname(__file__), "..", config_file)
+            if getattr(sys, "frozen", False):
+                base_dir = os.path.dirname(sys.executable)
+            else:
+                base_dir = os.path.join(os.path.dirname(__file__), "..")
+            config_file = os.path.join(base_dir, config_file)
             config_file = os.path.normpath(config_file)
         
         self.config_file = config_file
