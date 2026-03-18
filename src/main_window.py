@@ -1887,14 +1887,16 @@ class MainWindow(QMainWindow):
     
     def start_position_recording(self):
         """Start recording positions"""
-        if not self.selected_target_window:
+        if not self.selected_target_window and not self._full_screen_target:
             self.statusBar.showMessage("Position recording cancelled (invalid target window)")
             return
+
+        target_label = "Full Screen" if self._full_screen_target else self.selected_target_window.title
         
         reply = QMessageBox.information(
             self,
             "Position Recording",
-            f"Target: {self.selected_target_window.title}\n\n"
+            f"Target: {target_label}\n\n"
             f"{self._to_hotkey_display(self.hotkey_bindings['page_up'])}: Record Left Click at current mouse position.\n"
             f"{self._to_hotkey_display(self.hotkey_bindings['page_down'])}: Choose advanced action and record at current position.\n"
             "Press ESC when finished.",
@@ -2087,7 +2089,7 @@ class MainWindow(QMainWindow):
     
     def start_image_recording(self, image_click_type: ClickType = ClickType.IMAGE):
         """Start recording images using the new manager"""
-        if not self.selected_target_window:
+        if not self.selected_target_window and not self._full_screen_target:
             self.statusBar.showMessage("Image recording cancelled (no target window selected)")
             return
 
@@ -2101,8 +2103,15 @@ class MainWindow(QMainWindow):
             key_bindings=self._get_recording_hotkeys(),
             parent=self
         )
+        target_window = self.selected_target_window
+        if self._full_screen_target:
+            try:
+                desktop_hwnd = win32gui.GetDesktopWindow()
+                target_window = Window(int(desktop_hwnd), "Full Screen", "FULL_SCREEN")
+            except Exception:
+                target_window = None
         self.image_recording_manager.start(
-            target_window=self.selected_target_window,
+            target_window=target_window,
             require_click_position=require_click_position
         )
         if image_click_type == ClickType.IMAGE:
@@ -2112,7 +2121,8 @@ class MainWindow(QMainWindow):
         else:
             mode = "Image Recognition"
         self._set_status_recording_style(True)
-        self.statusBar.showMessage(f"[REC] {mode} recording started. Target: {self.selected_target_window.title}")
+        target_label = "Full Screen" if self._full_screen_target else self.selected_target_window.title
+        self.statusBar.showMessage(f"[REC] {mode} recording started. Target: {target_label}")
     
     def on_image_recorded(self, recorded: dict, total_count: int):
         """Handle one image+click position recorded and persist it immediately"""

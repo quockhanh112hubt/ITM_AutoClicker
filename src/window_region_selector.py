@@ -18,15 +18,22 @@ class WindowRegionSelector(QWidget):
     
     region_selected = pyqtSignal(int, int, int, int)  # x1, y1, x2, y2
     
-    def __init__(self, window_hwnd: int, on_region_selected: Callable = None):
+    def __init__(self, window_hwnd: int | None, on_region_selected: Callable = None):
         super().__init__()
         
         self.window_hwnd = window_hwnd
         self.on_region_selected = on_region_selected
         
         # Get window position and size - use screen coordinates
-        rect = win32gui.GetWindowRect(window_hwnd)
-        window_x1, window_y1, window_x2, window_y2 = rect
+        if window_hwnd is None:
+            import win32api
+            window_x1 = int(win32api.GetSystemMetrics(win32con.SM_XVIRTUALSCREEN))
+            window_y1 = int(win32api.GetSystemMetrics(win32con.SM_YVIRTUALSCREEN))
+            window_x2 = window_x1 + int(win32api.GetSystemMetrics(win32con.SM_CXVIRTUALSCREEN))
+            window_y2 = window_y1 + int(win32api.GetSystemMetrics(win32con.SM_CYVIRTUALSCREEN))
+        else:
+            rect = win32gui.GetWindowRect(window_hwnd)
+            window_x1, window_y1, window_x2, window_y2 = rect
         
         AppLogger.debug(f"Window hwnd={window_hwnd}")
         AppLogger.debug(f"Window rect from GetWindowRect: ({window_x1}, {window_y1}, {window_x2}, {window_y2})")
@@ -188,19 +195,20 @@ class WindowRegionSelector(QWidget):
             AppLogger.debug(f"Selection global: ({global_x1}, {global_y1}, {global_x2}, {global_y2})")
             
             # Debug: Save a test screenshot of the entire window
-            try:
-                from PIL import ImageGrab
-                test_window = ImageGrab.grab(
-                    bbox=(self.window_x1_orig, self.window_y1_orig, self.window_x2_orig, self.window_y2_orig)
-                )
-                test_window.save("test_window_capture.png")
-                AppLogger.debug(f"Saved test_window_capture.png - size: {test_window.size}")
-                
-                test_region = ImageGrab.grab(bbox=(global_x1, global_y1, global_x2, global_y2))
-                test_region.save("test_region_capture.png")
-                AppLogger.debug(f"Saved test_region_capture.png - size: {test_region.size}")
-            except Exception as e:
-                AppLogger.debug(f"Error saving test images: {e}")
+            if self.window_hwnd is not None:
+                try:
+                    from PIL import ImageGrab
+                    test_window = ImageGrab.grab(
+                        bbox=(self.window_x1_orig, self.window_y1_orig, self.window_x2_orig, self.window_y2_orig)
+                    )
+                    test_window.save("test_window_capture.png")
+                    AppLogger.debug(f"Saved test_window_capture.png - size: {test_window.size}")
+                    
+                    test_region = ImageGrab.grab(bbox=(global_x1, global_y1, global_x2, global_y2))
+                    test_region.save("test_region_capture.png")
+                    AppLogger.debug(f"Saved test_region_capture.png - size: {test_region.size}")
+                except Exception as e:
+                    AppLogger.debug(f"Error saving test images: {e}")
             
             # Close overlay IMMEDIATELY to allow capture
             self.close()
