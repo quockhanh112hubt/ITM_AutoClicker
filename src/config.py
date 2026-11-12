@@ -24,6 +24,8 @@ class Config:
         "last_script": None,
         "auto_check_updates": True,
         "github_repo": GITHUB_REPO,
+        "background_mouse_compatibility": False,
+        "unity_virtual_mouse": False,
     }
     
     def __init__(self, config_file: str = CONFIG_FILE_PATH) -> None:

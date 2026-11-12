@@ -128,7 +128,9 @@ class MainWindow(QMainWindow):
             self.config.get("drag_mode", "hybrid"),
             self.config.get("use_real_mouse", False),
             self.config.get("image_confidence", 0.8),
-            self.config.get("ocr_language", "eng+vie")
+            self.config.get("ocr_language", "eng+vie"),
+            background_mouse_compatibility=self.config.get("background_mouse_compatibility", False),
+            unity_virtual_mouse=self.config.get("unity_virtual_mouse", False),
         )
         self.auto_clicker.set_on_status_changed(self._on_status_changed_from_worker)
         self.auto_clicker.set_on_action_executed(self._on_action_executed_from_worker)
@@ -1398,6 +1400,33 @@ class MainWindow(QMainWindow):
             "but it will occupy your mouse during execution."
         )
         runtime_layout.addWidget(self.real_mouse_checkbox)
+
+        self.background_compatibility_checkbox = QCheckBox("Background mouse compatibility (experimental)")
+        self.background_compatibility_checkbox.setChecked(
+            bool(self.config.get("background_mouse_compatibility", False))
+        )
+        self.background_compatibility_checkbox.setEnabled(not self.auto_clicker.use_real_mouse)
+        self.background_compatibility_checkbox.setToolTip(
+            "Try slower background mouse gestures for game clients. The cursor stays free.\n"
+            "Some games still do not accept background input.\n"
+            "For background dragging, choose Background only or Hybrid in Drag Mode."
+        )
+        self.background_compatibility_checkbox.toggled.connect(self.on_background_compatibility_changed)
+        runtime_layout.addWidget(self.background_compatibility_checkbox)
+
+        self.unity_virtual_mouse_checkbox = QCheckBox("Unity virtual mouse — MongThienKiem (experimental)")
+        self.unity_virtual_mouse_checkbox.setChecked(bool(self.config.get("unity_virtual_mouse", False)))
+        self.unity_virtual_mouse_checkbox.setEnabled(not self.auto_clicker.use_real_mouse)
+        self.unity_virtual_mouse_checkbox.setToolTip(
+            "Loads an x64 helper into the supported MongThienKiem client when you press Start.\n"
+            "Provides a virtual mouse without moving your cursor or activating the game.\n"
+            "Mouse actions only. Stop disables virtual input; restart the game to unload the helper."
+        )
+        self.unity_virtual_mouse_checkbox.toggled.connect(self.on_unity_virtual_mouse_changed)
+        runtime_layout.addWidget(self.unity_virtual_mouse_checkbox)
+        self.background_compatibility_checkbox.setEnabled(
+            not self.auto_clicker.use_real_mouse and not self.auto_clicker.unity_virtual_mouse
+        )
 
         self.always_on_top_checkbox = QCheckBox("Main window always on top")
         self.always_on_top_checkbox.setChecked(bool(self._always_on_top_enabled))
@@ -3797,7 +3826,11 @@ class MainWindow(QMainWindow):
         self._running_action_key_map = key_map
         self.update_table()
         
-        self.auto_clicker.execute_script(runtime_script)
+        try:
+            self.auto_clicker.execute_script(runtime_script)
+        except (ValueError, RuntimeError) as exc:
+            QMessageBox.warning(self, "Cannot start script", str(exc))
+            return
         self._set_action_add_ui_visible(False)
         self._update_run_button_states(True)
 
@@ -3918,13 +3951,43 @@ class MainWindow(QMainWindow):
 
     def on_use_real_mouse_changed(self, checked: bool):
         """Handle toggle for using real mouse for all actions."""
+        if self.auto_clicker.is_running and self.auto_clicker.unity_virtual_mouse:
+            self.real_mouse_checkbox.blockSignals(True)
+            self.real_mouse_checkbox.setChecked(self.auto_clicker.use_real_mouse)
+            self.real_mouse_checkbox.blockSignals(False)
+            self.statusBar.showMessage("Stop the script before changing Unity virtual mouse mode")
+            return
         enabled = bool(checked)
         self.auto_clicker.set_use_real_mouse(enabled)
         self.config.set("use_real_mouse", enabled)
+        self.background_compatibility_checkbox.setEnabled(not enabled)
+        self.unity_virtual_mouse_checkbox.setEnabled(not enabled)
+        if enabled and self.unity_virtual_mouse_checkbox.isChecked():
+            self.unity_virtual_mouse_checkbox.setChecked(False)
         if enabled:
             self.statusBar.showMessage("Real mouse mode enabled: all actions will occupy mouse")
         else:
             self.statusBar.showMessage("Real mouse mode disabled: using non-occupy mode where supported")
+
+    def on_background_compatibility_changed(self, checked: bool):
+        self.auto_clicker.set_background_mouse_compatibility(checked)
+        self.config.set("background_mouse_compatibility", bool(checked))
+        self.statusBar.showMessage(
+            "Background mouse compatibility enabled (experimental)" if checked
+            else "Background mouse compatibility disabled"
+        )
+
+    def on_unity_virtual_mouse_changed(self, checked: bool):
+        if self.auto_clicker.is_running:
+            self.unity_virtual_mouse_checkbox.blockSignals(True)
+            self.unity_virtual_mouse_checkbox.setChecked(self.auto_clicker.unity_virtual_mouse)
+            self.unity_virtual_mouse_checkbox.blockSignals(False)
+            self.statusBar.showMessage("Stop the script before changing Unity virtual mouse mode")
+            return
+        self.auto_clicker.set_unity_virtual_mouse(checked)
+        self.config.set("unity_virtual_mouse", bool(checked))
+        self.background_compatibility_checkbox.setEnabled(not checked and not self.auto_clicker.use_real_mouse)
+        self.statusBar.showMessage("Unity virtual mouse enabled (experimental)" if checked else "Unity virtual mouse disabled")
 
     def is_always_on_top_enabled(self) -> bool:
         """Expose always-on-top state for child dialogs."""

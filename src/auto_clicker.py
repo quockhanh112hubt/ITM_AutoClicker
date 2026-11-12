@@ -12,6 +12,8 @@ import numpy as np
 from PIL import ImageGrab
 from src.click_script import ClickScript, ClickAction, ClickType
 from src.image_matcher import ImageMatcher
+from src.logger import AppLogger
+from src.unity_bridge import UnityBridge, UnityBridgeError, UnityBridgeCancelled
 from src.constants import (
     DEFAULT_CLICK_DELAY_MS, DEFAULT_PRIORITY_COOLDOWN_MS, DEFAULT_DRAG_MODE,
     DEFAULT_HOLD_MS, DEFAULT_DRAG_MS, UNIFORM_COLOR_THRESHOLD,
@@ -32,6 +34,10 @@ except Exception:
     pytesseract = None
 
 
+class _BackgroundInputInterrupted(Exception):
+    """Pause/stop interrupted an in-progress background mouse gesture."""
+
+
 class AutoClicker:
     """Engine for recording and executing click scripts"""
     
@@ -42,7 +48,9 @@ class AutoClicker:
         drag_mode: str = DEFAULT_DRAG_MODE,
         use_real_mouse: bool = False,
         image_confidence: float = 0.8,
-        ocr_language: str = "eng+vie"
+        ocr_language: str = "eng+vie",
+        background_mouse_compatibility: bool = False,
+        unity_virtual_mouse: bool = False,
     ):
         """
         Initialize auto clicker
@@ -80,6 +88,10 @@ class AutoClicker:
         self.priority_cooldown_ms = priority_cooldown_ms
         self.drag_mode = str(drag_mode or DEFAULT_DRAG_MODE).lower()
         self.use_real_mouse = bool(use_real_mouse)
+        self.background_mouse_compatibility = bool(background_mouse_compatibility)
+        self.unity_virtual_mouse = bool(unity_virtual_mouse)
+        self._unity_bridge = None
+        self._terminal_error = ""
         self.ocr_language = str(ocr_language or "eng+vie").strip() or "eng+vie"
         self.is_running = False
         self.is_paused = False
@@ -157,6 +169,36 @@ class AutoClicker:
         """Set whether all mouse actions should use real mouse input."""
         self.use_real_mouse = bool(enabled)
 
+    def set_background_mouse_compatibility(self, enabled: bool) -> None:
+        """Enable paced, acknowledged window messages without moving the cursor."""
+        self.background_mouse_compatibility = bool(enabled)
+
+    def set_unity_virtual_mouse(self, enabled: bool) -> None:
+        if self.is_running:
+            raise RuntimeError("Stop the script before changing Unity virtual mouse mode")
+        self.unity_virtual_mouse = bool(enabled)
+        if not enabled and self._unity_bridge:
+            self._unity_bridge.close()
+            self._unity_bridge = None
+
+    def _unity_mouse_action(self, hwnd, x, y, button="left", mode="mouse_click", hold_ms=1000,
+                            scroll_clicks=0, drag_to=None, drag_ms=500):
+        try:
+            if self._unity_bridge is None:
+                self._notify_status("Connecting Unity virtual mouse to supported MongThienKiem client...")
+                self._unity_bridge = UnityBridge(hwnd, cancelled=lambda: not self.is_running or self.is_paused)
+            elif self._unity_bridge.hwnd != int(hwnd):
+                raise UnityBridgeError("The target changed; stop and start again")
+            self._unity_bridge.mouse_action(x, y, button, mode, hold_ms, scroll_clicks, drag_to, drag_ms)
+            AppLogger.debug(f"Unity virtual mouse consumed: {self._unity_bridge.diagnostics()}")
+        except UnityBridgeCancelled:
+            raise _BackgroundInputInterrupted()
+        except Exception as exc:
+            self._terminal_error = f"Unity virtual mouse error: {exc}"
+            AppLogger.error(self._terminal_error)
+            self.is_running = False
+            raise
+
     def set_ocr_language(self, language_code: str) -> None:
         """Set OCR language code for Tesseract (example: eng, vie, eng+vie)."""
         value = str(language_code or "").strip()
@@ -209,8 +251,23 @@ class AutoClicker:
         
         if self.is_running:
             return
+
+        if self.unity_virtual_mouse:
+            if self.use_real_mouse:
+                raise ValueError("Turn off Use real mouse before testing Unity virtual mouse")
+            for action in script.get_actions():
+                if not bool(action.data.get("__normal_enabled", True)):
+                    continue
+                if action.type in (ClickType.POSITION, ClickType.IMAGE, ClickType.IMAGE_DIRECT):
+                    if not action.data.get("target_hwnd"):
+                        raise ValueError("Unity virtual mouse requires a supported game window; Full Screen is not supported")
+                    if str(action.data.get("action_mode", "mouse_click")).lower() not in (
+                        "mouse_click", "mouse_hold", "mouse_scroll", "mouse_drag"
+                    ):
+                        raise ValueError("The Unity prototype supports mouse actions only; unselect keyboard actions")
         
         self.current_script = script
+        self._terminal_error = ""
         self.is_running = True
         self.is_paused = False
         self._priority_last_trigger_at.clear()
@@ -242,6 +299,10 @@ class AutoClicker:
             self._notify_status(f"Error: {e}")
         finally:
             self.is_running = False
+            bridge = self._unity_bridge
+            if bridge:
+                bridge.close()
+                self._unity_bridge = None
 
     def _recognition_loop(self) -> None:
         """Poll IMAGE_RECOGNITION rows on a dedicated worker so OCR latency does not slow action execution."""
@@ -256,7 +317,7 @@ class AutoClicker:
             self._notify_status(f"Recognition error: {e}")
         finally:
             self.is_running = False
-            self._notify_status("Auto click stopped")
+            self._notify_status(self._terminal_error or "Auto click stopped")
 
     def _sleep_interruptible(self, duration_sec: float) -> bool:
         """
@@ -401,6 +462,10 @@ class AutoClicker:
                 return
             if not from_pending:
                 self._execute_priority_actions()
+        except _BackgroundInputInterrupted:
+            self._cycle_executed_by_index[action_index] = False
+            if will_wrap_cycle and (not from_pending):
+                self._cycle_executed_by_index.clear()
         except Exception as e:
             self._cycle_executed_by_index[action_index] = False
             if will_wrap_cycle and (not from_pending):
@@ -742,7 +807,7 @@ class AutoClicker:
                     mouse_button, action_mode, hold_ms, scroll_clicks=scroll_clicks
                 )
             self._notify_status(
-                f"Executed {action_mode} on target hwnd={target_hwnd} at client ({int(client_x)}, {int(client_y)})"
+                f"Sent background {action_mode} to hwnd={target_hwnd} at client ({int(client_x)}, {int(client_y)})"
             )
             return True
         
@@ -834,7 +899,7 @@ class AutoClicker:
                             drag_ms=int(drag_ms)
                         )
                         self._notify_status(
-                            f"Image found in target: {os.path.basename(image_path)} -> {action_mode} at ({cx}, {cy})"
+                            f"Image found in target: {os.path.basename(image_path)} -> sent background {action_mode} at ({cx}, {cy})"
                         )
                         return True
                     elif click_x is not None and click_y is not None:
@@ -874,7 +939,7 @@ class AutoClicker:
                             drag_ms=int(drag_ms)
                         )
                         self._notify_status(
-                            f"Image found in target: {os.path.basename(image_path)} -> {action_mode} at ({int(cx)}, {int(cy)})"
+                            f"Image found in target: {os.path.basename(image_path)} -> sent background {action_mode} at ({int(cx)}, {int(cy)})"
                         )
                         return True
                     else:
@@ -915,7 +980,7 @@ class AutoClicker:
                             drag_ms=int(drag_ms)
                         )
                         self._notify_status(
-                            f"Image found in target: {os.path.basename(image_path)} -> {action_mode} at matched position"
+                            f"Image found in target: {os.path.basename(image_path)} -> sent background {action_mode} at matched position"
                         )
                         return True
                 elif click_x is not None and click_y is not None:
@@ -1023,7 +1088,7 @@ class AutoClicker:
                 drag_ms=int(drag_ms)
             )
             self._notify_status(
-                f"Image direct {action_mode}: {os.path.basename(image_path)} -> target client ({int(cx)}, {int(cy)})"
+                f"Image direct: sent background {action_mode}: {os.path.basename(image_path)} -> target client ({int(cx)}, {int(cy)})"
             )
             return True
         else:
@@ -1232,6 +1297,13 @@ class AutoClicker:
         drag_ms: int = 500,
     ) -> None:
         """Post mouse action messages to the most relevant child window at point."""
+        if self.unity_virtual_mouse:
+            self._unity_mouse_action(
+                hwnd, client_x, client_y, mouse_button, action_mode, hold_ms,
+                scroll_clicks, (drag_client_x, drag_client_y)
+                if drag_client_x is not None and drag_client_y is not None else None, drag_ms,
+            )
+            return
         # Drag is much more reliable when delivered as an ordered stream
         # on the target window client coordinates.
         if str(action_mode).lower() == "mouse_drag":
@@ -1248,8 +1320,13 @@ class AutoClicker:
             )
             return
 
-        screen_x, screen_y = win32gui.ClientToScreen(hwnd, (int(client_x), int(client_y)))
         click_hwnd, lx, ly = self._resolve_click_target(hwnd, int(client_x), int(client_y))
+        if self.background_mouse_compatibility:
+            self._send_compatible_background_mouse(
+                int(hwnd), click_hwnd, int(lx), int(ly), mouse_button,
+                action_mode, hold_ms, scroll_clicks,
+            )
+            return
         lparam = win32api.MAKELONG(int(lx), int(ly))
         drop_lx, drop_ly = int(lx), int(ly)
         if drag_client_x is not None and drag_client_y is not None:
@@ -1288,6 +1365,58 @@ class AutoClicker:
             if mode == "mouse_hold":
                 time.sleep(max(0, int(hold_ms)) / 1000.0)
             win32gui.PostMessage(click_hwnd, win32con.WM_LBUTTONUP, 0, lparam_drop)
+
+    def _send_background_mouse_message(self, hwnd: int, message: int, wparam: int, lparam: int) -> None:
+        """Wait for delivery, with a bound when the target stops responding.
+
+        A successful return only confirms message dispatch, not a game action.
+        Never synthesize foreground input or activate the target as a fallback.
+        """
+        try:
+            sent, _ = win32gui.SendMessageTimeout(
+                int(hwnd), int(message), int(wparam), int(lparam),
+                win32con.SMTO_ABORTIFHUNG | win32con.SMTO_BLOCK, 250,
+            )
+            if not sent:
+                raise RuntimeError("Window did not acknowledge the message")
+        except Exception as exc:
+            error = f"Background mouse delivery failed: hwnd={hwnd}, message=0x{message:04X}: {exc}"
+            AppLogger.warning(error)
+            raise RuntimeError(error) from exc
+
+    def _wait_background_mouse(self, seconds: float) -> None:
+        if not self._sleep_interruptible(seconds):
+            raise _BackgroundInputInterrupted()
+
+    def _send_compatible_background_mouse(
+        self, root_hwnd: int, click_hwnd: int, x: int, y: int,
+        mouse_button: str, action_mode: str, hold_ms: int, scroll_clicks: int,
+    ) -> None:
+        """Separate move/down/up across frames for clients that poll each frame."""
+        lparam = win32api.MAKELONG(x, y)
+        sx, sy = win32gui.ClientToScreen(click_hwnd, (x, y))
+        AppLogger.debug(
+            f"Background compatibility send: root={root_hwnd}, receiver={click_hwnd}, "
+            f"client=({x}, {y}), screen=({sx}, {sy}), mode={action_mode}"
+        )
+        self._send_background_mouse_message(click_hwnd, win32con.WM_MOUSEMOVE, 0, lparam)
+        self._wait_background_mouse(0.03)
+        if str(action_mode).lower() == "mouse_scroll":
+            self._post_mouse_wheel(click_hwnd, root_hwnd, x, y, scroll_clicks)
+            return
+
+        down, up, pressed = {
+            "right": (win32con.WM_RBUTTONDOWN, win32con.WM_RBUTTONUP, win32con.MK_RBUTTON),
+            "middle": (win32con.WM_MBUTTONDOWN, win32con.WM_MBUTTONUP, win32con.MK_MBUTTON),
+        }.get(str(mouse_button).lower(), (win32con.WM_LBUTTONDOWN, win32con.WM_LBUTTONUP, win32con.MK_LBUTTON))
+        # Even if DOWN times out, it may already have reached the target.
+        # Always attempt UP, including when pause/stop interrupts the hold.
+        try:
+            self._send_background_mouse_message(click_hwnd, down, pressed, lparam)
+            duration = max(0.0, int(hold_ms) / 1000.0) if str(action_mode).lower() == "mouse_hold" else 0.05
+            self._wait_background_mouse(duration)
+        finally:
+            self._send_background_mouse_message(click_hwnd, up, 0, lparam)
     
     def _perform_foreground_mouse_action(
         self,
@@ -1332,24 +1461,22 @@ class AutoClicker:
             pyautogui.click(int(x), int(y), button=button)
 
     def _post_mouse_wheel(self, click_hwnd: int, root_hwnd: int, lx: int, ly: int, scroll_clicks: int) -> None:
-        """Send mouse wheel messages to click target (and root for compatibility)."""
+        """Wheel messages require screen coordinates, unlike button messages."""
         clicks = int(scroll_clicks)
         if clicks == 0:
             return
         step = 1 if clicks > 0 else -1
+        sx, sy = win32gui.ClientToScreen(click_hwnd, (int(lx), int(ly)))
+        lparam = win32api.MAKELONG(int(sx), int(sy))
         for _ in range(abs(clicks)):
             delta = win32con.WHEEL_DELTA * step
             wparam = (delta << 16) & 0xFFFFFFFF
-            lparam = win32api.MAKELONG(int(lx), int(ly))
-            try:
+            if self.background_mouse_compatibility:
+                self._send_background_mouse_message(click_hwnd, win32con.WM_MOUSEWHEEL, wparam, lparam)
+                self._wait_background_mouse(0.03)
+            else:
+                # DefWindowProc propagates wheel input to the parent if needed.
                 win32gui.PostMessage(click_hwnd, win32con.WM_MOUSEWHEEL, wparam, lparam)
-            except Exception:
-                pass
-            if click_hwnd != root_hwnd:
-                try:
-                    win32gui.PostMessage(root_hwnd, win32con.WM_MOUSEWHEEL, wparam, lparam)
-                except Exception:
-                    pass
 
     def _client_to_screen_safe(self, hwnd: int, client_x: int, client_y: int, fallback_x: Optional[int] = None, fallback_y: Optional[int] = None) -> Tuple[int, int]:
         """Convert client coordinates to screen safely."""
@@ -1448,6 +1575,17 @@ class AutoClicker:
         - real: always real drag (occupies mouse)
         - hybrid: try background first, fallback to real if background path errors
         """
+        if self.unity_virtual_mouse:
+            ex, ey = action.data.get("drag_client_x"), action.data.get("drag_client_y")
+            if ex is None or ey is None:
+                if action.data.get("drag_to_x") is None or action.data.get("drag_to_y") is None:
+                    raise UnityBridgeError("Unity drag destination is missing")
+                ex, ey = win32gui.ScreenToClient(int(target_hwnd),
+                    (int(action.data["drag_to_x"]), int(action.data["drag_to_y"])))
+            self._unity_mouse_action(target_hwnd, start_client_x, start_client_y,
+                str(action.data.get("mouse_button", "left")).lower(), "mouse_drag",
+                drag_to=(int(ex), int(ey)), drag_ms=int(action.data.get("drag_ms", 500) or 500))
+            return True
         mode = str(action.data.get("drag_mode", self.drag_mode or "hybrid")).lower()
         if mode not in ("hybrid", "background", "real"):
             mode = "hybrid"
@@ -1478,10 +1616,12 @@ class AutoClicker:
                     mouse_button=mouse_button,
                     drag_ms=int(drag_ms),
                 )
-                self._notify_status("Drag executed in background mode")
+                self._notify_status("Background drag messages sent")
                 return True
+            except _BackgroundInputInterrupted:
+                return False
             except Exception as e:
-                if mode == "background":
+                if mode == "background" or self.background_mouse_compatibility:
                     self._notify_status(f"Background drag failed: {e}")
                     return False
                 self._notify_status(f"Background drag failed, fallback real drag: {e}")
@@ -1554,25 +1694,37 @@ class AutoClicker:
             mk = win32con.MK_LBUTTON
 
         start_lp = win32api.MAKELONG(int(start_lx), int(start_ly))
-        end_lp = win32api.MAKELONG(int(end_lx), int(end_ly))
         steps = max(3, min(20, int(max(0, int(drag_ms)) / 60) + 3))
         delay = max(0.0, max(0, int(drag_ms)) / 1000.0 / steps)
 
-        # Use SendMessage for strict ordering; many apps ignore queued PostMessage drag streams.
-        win32gui.SendMessage(click_hwnd, win32con.WM_MOUSEMOVE, 0, start_lp)
-        win32gui.SendMessage(click_hwnd, down_msg, mk, start_lp)
-        for i in range(1, steps + 1):
-            ratio = i / float(steps)
-            mx = int(start_lx + (end_lx - start_lx) * ratio)
-            my = int(start_ly + (end_ly - start_ly) * ratio)
-            move_lp = win32api.MAKELONG(mx, my)
-            win32gui.SendMessage(click_hwnd, win32con.WM_MOUSEMOVE, mk, move_lp)
-            if delay > 0:
-                time.sleep(delay)
-        win32gui.SendMessage(click_hwnd, up_msg, 0, end_lp)
+        compatible = self.background_mouse_compatibility
+        send = self._send_background_mouse_message if compatible else win32gui.SendMessage
+        send(click_hwnd, win32con.WM_MOUSEMOVE, 0, start_lp)
+        if compatible:
+            self._wait_background_mouse(0.03)
+        release_lp = start_lp
+        try:
+            send(click_hwnd, down_msg, mk, start_lp)
+            if compatible:
+                self._wait_background_mouse(0.05)
+            for i in range(1, steps + 1):
+                ratio = i / float(steps)
+                mx = int(start_lx + (end_lx - start_lx) * ratio)
+                my = int(start_ly + (end_ly - start_ly) * ratio)
+                release_lp = win32api.MAKELONG(mx, my)
+                send(click_hwnd, win32con.WM_MOUSEMOVE, mk, release_lp)
+                if compatible:
+                    self._wait_background_mouse(max(0.016, delay))
+                elif delay > 0:
+                    time.sleep(delay)
+        finally:
+            send(click_hwnd, up_msg, 0, release_lp)
 
     def _execute_key_action(self, action: ClickAction, target_hwnd: Optional[int] = None) -> bool:
         """Execute keyboard action types: key_press, hotkey, key_hold."""
+        if self.unity_virtual_mouse:
+            self.is_running = False
+            raise UnityBridgeError("Unity virtual mouse prototype does not support keyboard actions")
         mode = str(action.data.get('action_mode', '')).lower()
         key_name = str(action.data.get('key_name', '')).lower()
         hotkey_keys = action.data.get('hotkey_keys') or []
@@ -1718,6 +1870,8 @@ class AutoClicker:
     def pause(self) -> None:
         """Pause execution"""
         self.is_paused = True
+        if self._unity_bridge:
+            self._unity_bridge.release()
         self._notify_status("Paused")
     
     def resume(self) -> None:
@@ -1729,10 +1883,15 @@ class AutoClicker:
         """Stop execution"""
         self.is_running = False
         self.is_paused = False
+        if self._unity_bridge:
+            self._unity_bridge.release()
         self._next_action_index = 0
         self._cycle_executed_by_index.clear()
         if self._execution_thread:
             self._execution_thread.join(timeout=ACTION_EXECUTION_THREAD_TIMEOUT)
         if self._recognition_thread:
             self._recognition_thread.join(timeout=ACTION_EXECUTION_THREAD_TIMEOUT)
+        if self._unity_bridge and not (self._execution_thread and self._execution_thread.is_alive()):
+            self._unity_bridge.close()
+            self._unity_bridge = None
         self._notify_status("Stopped")
