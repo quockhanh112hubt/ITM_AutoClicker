@@ -1,4 +1,4 @@
-"""Opt-in x64, in-process virtual mouse for one explicitly supported client build.
+"""Opt-in x64, in-process virtual mouse selected by Unity compatibility profile.
 
 Loading the helper changes that game's runtime input handling. It never falls
 back to global mouse input. Closing the connection restores normal input; the
@@ -20,6 +20,7 @@ import time
 import win32api
 import win32gui
 import win32process
+from src.unity_profiles import inspect_client, ProfileStore, require_profile, UnityProfileError
 
 
 class UnityBridgeError(RuntimeError):
@@ -42,10 +43,9 @@ class Shared(ctypes.Structure):
 
 
 assert ctypes.sizeof(Shared) == 96
-FINGERPRINTS = {
-    "UnityPlayer.dll": "3fc09d493e387c33b2c0df29d9ec75803158a3a98ad885917b1039d13bfc6c6d",
-    "GameAssembly.dll": "802f3a21bd70ca083b4f1cc748acc6a2c8c32cece75ce38c9ab656a27694cc2d",
-}
+PROTOCOL_VERSION = 2
+MAPPING_PREFIX = "ITMUnityProfiles"
+HELPER_NAME = "itm_unity_bridge_profiles.dll"
 
 kernel = ctypes.WinDLL("kernel32", use_last_error=True)
 SIZE_T = ctypes.c_size_t
@@ -79,32 +79,23 @@ def _modules(process):
             for base in win32process.EnumProcessModules(process)]
 
 
-def validate_client(hwnd: int) -> tuple[int, Path]:
-    """Reject other games/builds before requesting write/thread process rights."""
+class ValidatedClient(tuple):
+    def __new__(cls, info, profile):
+        value = super().__new__(cls, (info.pid, Path(info.executable).parent))
+        value.profile = profile
+        return value
+
+
+def validate_client(hwnd: int, profile_id="auto", allow_experimental=False, profile_store_path=None) -> tuple[int, Path]:
+    """Detect and select a compatible profile before requesting write rights."""
     if struct.calcsize("P") != 8:
         raise UnityBridgeError("Unity virtual mouse requires 64-bit Python / a 64-bit application")
-    if not win32gui.IsWindow(hwnd) or win32gui.GetClassName(hwnd) != "UnityWndClass":
-        raise UnityBridgeError("Select the supported MongThienKiem client window first")
-    _, pid = win32process.GetWindowThreadProcessId(hwnd)
-    process = win32api.OpenProcess(0x0400 | 0x0010, False, pid)
     try:
-        executable = Path(win32process.GetModuleFileNameEx(process, 0))
-        modules = _modules(process)
-    finally:
-        win32api.CloseHandle(process)
-    if executable.name.casefold() != "mongthienkiem.exe":
-        raise UnityBridgeError("This prototype supports MongThienKiem.exe only")
-    root = executable.parent
-    loaded = {p.name.casefold(): p for _, p in modules}
-    for name, expected in FINGERPRINTS.items():
-        path = root / name
-        if loaded.get(name.casefold()) != path or not path.is_file():
-            raise UnityBridgeError(f"Expected client module is not loaded: {name}")
-        with path.open("rb") as handle:
-            actual = hashlib.file_digest(handle, "sha256").hexdigest()
-        if actual != expected:
-            raise UnityBridgeError(f"Unsupported MongThienKiem build ({name} fingerprint differs); helper was not loaded")
-    return pid, root
+        info = inspect_client(hwnd)
+        profile = require_profile(info, ProfileStore(profile_store_path), profile_id, allow_experimental)
+        return ValidatedClient(info, profile)
+    except (UnityProfileError, OSError) as exc:
+        raise UnityBridgeError(str(exc)) from exc
 
 
 def _load_helper(pid: int, path: Path):
@@ -114,6 +105,8 @@ def _load_helper(pid: int, path: Path):
     completed = False
     try:
         modules = _modules(process)
+        if any(p.name.casefold() == "itm_unity_bridge.dll" for _, p in modules):
+            raise UnityBridgeError("The previous MongThienKiem-only helper is loaded. Restart this game before using Unity profiles.")
         existing = [p for _, p in modules if p.name.casefold() == path.name.casefold()]
         if existing:
             if existing[0] != path:
@@ -160,10 +153,12 @@ def _load_helper(pid: int, path: Path):
 
 
 class UnityBridge:
-    def __init__(self, hwnd: int, cancelled=lambda: False):
+    def __init__(self, hwnd: int, cancelled=lambda: False, *, profile_id="auto", allow_experimental=False, profile_store_path=None):
         self.hwnd = int(hwnd)
         self.cancelled = cancelled
-        self.pid, self.client_dir = validate_client(self.hwnd)
+        validated = validate_client(self.hwnd, profile_id, allow_experimental, profile_store_path)
+        self.pid, self.client_dir = validated
+        self.profile_id = getattr(validated, "profile", {}).get("id", profile_id)
         self._lock = threading.RLock()
         self._stop = threading.Event()
         self._heartbeat_thread = None
@@ -171,19 +166,19 @@ class UnityBridge:
         self._semaphore = None
         self._owns_semaphore = False
         root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
-        helper = (root / "resource/unity_bridge/itm_unity_bridge.dll").resolve()
+        helper = (root / "resource/unity_bridge" / HELPER_NAME).resolve()
         if not helper.is_file():
             raise UnityBridgeError("Unity helper DLL is missing. Run: python tools/build_unity_bridge.py")
         try:
-            self._semaphore = _wincheck(kernel.CreateSemaphoreW(None, 1, 1, f"Local\\ITMUnityBridgeControl_{self.pid}"), "Create bridge lock")
+            self._semaphore = _wincheck(kernel.CreateSemaphoreW(None, 1, 1, f"Local\\{MAPPING_PREFIX}Control_{self.pid}"), "Create bridge lock")
             if kernel.WaitForSingleObject(self._semaphore, 0) != 0:
                 raise UnityBridgeError("Another ITM session controls this game; stop it first")
             self._owns_semaphore = True
-            self._mapping = mmap.mmap(-1, ctypes.sizeof(Shared), tagname=f"Local\\ITMUnityBridge_{self.pid}")
+            self._mapping = mmap.mmap(-1, ctypes.sizeof(Shared), tagname=f"Local\\{MAPPING_PREFIX}_{self.pid}")
             self.shared = Shared.from_buffer(self._mapping)
-            if self.shared.magic not in (0, 0x314D5449) or self.shared.version not in (0, 1):
+            if self.shared.magic not in (0, 0x314D5449) or self.shared.version not in (0, PROTOCOL_VERSION):
                 raise UnityBridgeError("Incompatible helper IPC; restart the game")
-            self.shared.magic, self.shared.version = 0x314D5449, 1
+            self.shared.magic, self.shared.version = 0x314D5449, PROTOCOL_VERSION
             self.shared.enabled = self.shared.buttons = 0
             self.shared.hwnd = self.hwnd
             self.shared.owner_pid = win32api.GetCurrentProcessId()
@@ -195,7 +190,12 @@ class UnityBridge:
             deadline = time.monotonic() + 10
             while self.shared.status != 2:
                 if self.shared.status < 0:
-                    raise UnityBridgeError(f"Unity helper initialization failed (stage {self.shared.status}, code {self.shared.error_code}); restart game to retry")
+                    reasons = {-1: "IL2CPP module missing", -2: "IL2CPP API missing", -3: "Unity domain unavailable",
+                        -4: "Legacy Input or uGUI runtime layout does not match", -5: "Hook library unavailable",
+                        -6: "An input function cannot be hooked", -7: "Hook activation failed", -8: "Runtime pointer or field validation failed",
+                        -9: "The active UI uses New Input System, not Legacy Input"}
+                    raise UnityBridgeError(f"Unity profile probe failed: {reasons.get(self.shared.status, 'unknown error')} "
+                        f"(stage {self.shared.status}, code {self.shared.error_code}). No virtual input was enabled; restart game to retry.")
                 if time.monotonic() > deadline:
                     raise UnityBridgeError("Unity helper initialization timed out; restart game before retrying")
                 time.sleep(0.02)
@@ -236,6 +236,9 @@ class UnityBridge:
             with self._lock:
                 if self.shared is None:
                     raise UnityBridgeError("Unity bridge was disconnected")
+                if self.shared.status < 0:
+                    raise UnityBridgeError("Unity runtime rejected this profile (stage " + str(self.shared.status) +
+                        "). The active scene may use New Input System; export the client report for investigation.")
                 if self.shared.ack == seq and self.shared.native_session == self.shared.session:
                     return
             time.sleep(0.005)
@@ -263,9 +266,13 @@ class UnityBridge:
             raise UnityBridgeError(f"Unsupported mouse button: {button}")
         if mode == "mouse_drag" and drag_to is None:
             raise UnityBridgeError("Unity drag destination is missing")
+        before = self.diagnostics()
         try:
             self._wait_ack(self._command(x, y, 0))
             self._sleep(0.04)
+            after = self.diagnostics()
+            if after["position_reads"] <= before["position_reads"] or after["button_reads"] <= before["button_reads"]:
+                raise UnityBridgeError("This scene did not read the virtual Legacy Input mouse. The profile is not compatible with its current input module.")
             if mode == "mouse_scroll":
                 self._wait_ack(self._command(x, y, 0, wheel=scroll_clicks))
                 self._sleep(0.04)
@@ -297,7 +304,7 @@ class UnityBridge:
         with self._lock:
             if self.shared is None:
                 return {"connected": False}
-            return {"connected": True, **{name: getattr(self.shared, name) for name in
+            return {"connected": True, "profile_id": self.profile_id, **{name: getattr(self.shared, name) for name in
                     ("status", "frame", "ack", "position_reads", "button_reads", "updates", "focus_overrides")}}
 
     def close(self):

@@ -1,7 +1,9 @@
-# ITM Unity virtual mouse prototype
+# ITM Unity virtual mouse compatibility profiles
 
-This opt-in helper is specific to the MongThienKiem Unity 6000.3.25f1 x64 build
-fingerprinted in `src/unity_bridge.py`. Other builds fail validation before loading.
+The opt-in helper uses profiles in `resource/unity_bridge/profiles.json` plus
+user-saved exact-build profiles. MongThienKiem has a fingerprinted, verified client
+profile. Other eligible IL2CPP x64 / Legacy Input / uGUI clients from Unity
+2019–2023 and Unity 6 (6000.x) use explicitly experimental engine-family profiles.
 It does not patch files on disk. It loads a DLL into the selected game's process
 and installs runtime detours; Stop disables the virtual input, while the inactive
 helper remains resident until game exit. Reconnect reuses that helper.
@@ -27,7 +29,11 @@ To package a separate test executable with the existing PyInstaller environment:
 .\.venv\Scripts\python.exe tools/build_unity_test.py
 ```
 
-Output: `dist/ITM_AutoClicker_Unity_Test.exe`.
+Output: `dist/ITM_AutoClicker_Unity_Profiles_Test.exe`.
+Native DLL: `resource/unity_bridge/itm_unity_bridge_profiles.dll` (protocol 2).
+The old MongThienKiem-only helper must not already be loaded; restart the game
+once when moving from the previous test build. DLLs from different builds are
+never stacked on top of each other.
 
 ## Design and limits
 
@@ -46,8 +52,18 @@ Output: `dist/ITM_AutoClicker_Unity_Test.exe`.
   is used by the virtual mouse backend.
 - The prototype handles mouse click/hold/scroll/drag. Keyboard actions and Full
   Screen targeting are rejected. Minimized game windows are not supported.
-- Do not treat this as a general Unity/game backend. A different executable build
-  requires investigation and validation before extending the fingerprint list.
+- Detection reads the selected process's module paths and on-disk PE/Unity
+  metadata. Selecting/refreshing/exporting a client never loads the helper.
+- Exact profile identity includes executable name and both native DLL hashes.
+  A game update does not inherit the previous user test result.
+- Native initialization validates the EventSystem fields' types/offsets against
+  the runtime instance size and verifies that hook addresses are executable and
+  belong to the expected Unity modules before enabling any detour.
+- If the active EventSystem uses InputSystemUIInputModule, the helper rejects the
+  profile before a button press. A scene that never reads virtual Legacy Input
+  also fails the first gesture's hover probe.
+- Family matches are eligibility checks, not a guarantee that a game accepts
+  input. Mono, x86, ARM and New Input System-only clients remain unsupported.
 
 ## Verification
 
@@ -56,15 +72,23 @@ Output: `dist/ITM_AutoClicker_Unity_Test.exe`.
 .\.venv\Scripts\python.exe -B tools/test_unity_bridge_native.py
 ```
 
-The second command compiles and launches a hidden, disposable fixture process.
-It tests actual DLL loading, detours, IPC, coordinate mapping, focus substitution,
-reconnect and lost-heartbeat release without accessing the real game.
+The second command compiles and launches a hidden, disposable, renamed fixture
+with separate fake UnityPlayer/GameAssembly modules. It exercises real detection,
+experimental opt-in, DLL loading, pointer validation, detours, IPC, coordinates,
+focus substitution, saved profiles, reconnect and lost-heartbeat release.
+Additional fixture processes verify rejection of New Input System UI and an
+incompatible field layout before a button press. These are synthetic runtime
+tests, not evidence that real Unity 2022 games were tested.
 
 ```powershell
-# Verify client build; does not load a helper or send input:
+# Inspect a selected client; does not load a helper or send input:
 .\.venv\Scripts\python.exe tools/unity_mouse_probe.py
+# Inspect another title / export a report:
+.\.venv\Scripts\python.exe tools/unity_mouse_probe.py --window-title "Other game" --report client.json
 # Explicitly load and inspect; no gesture:
 .\.venv\Scripts\python.exe tools/unity_mouse_probe.py --connect
+# Allow an eligible, untested engine-family profile:
+.\.venv\Scripts\python.exe tools/unity_mouse_probe.py --window-title "Other game" --allow-experimental --connect
 ```
 
 `--click X Y` sends one click in **client** coordinates. It requires the cursor

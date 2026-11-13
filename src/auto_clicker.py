@@ -51,6 +51,9 @@ class AutoClicker:
         ocr_language: str = "eng+vie",
         background_mouse_compatibility: bool = False,
         unity_virtual_mouse: bool = False,
+        unity_profile_id: str = "auto",
+        allow_experimental_unity_profiles: bool = False,
+        unity_profile_store_path: Optional[str] = None,
     ):
         """
         Initialize auto clicker
@@ -91,6 +94,9 @@ class AutoClicker:
         self.background_mouse_compatibility = bool(background_mouse_compatibility)
         self.unity_virtual_mouse = bool(unity_virtual_mouse)
         self._unity_bridge = None
+        self.unity_profile_id = unity_profile_id
+        self.allow_experimental_unity_profiles = bool(allow_experimental_unity_profiles)
+        self.unity_profile_store_path = unity_profile_store_path
         self._terminal_error = ""
         self.ocr_language = str(ocr_language or "eng+vie").strip() or "eng+vie"
         self.is_running = False
@@ -185,8 +191,10 @@ class AutoClicker:
                             scroll_clicks=0, drag_to=None, drag_ms=500):
         try:
             if self._unity_bridge is None:
-                self._notify_status("Connecting Unity virtual mouse to supported MongThienKiem client...")
-                self._unity_bridge = UnityBridge(hwnd, cancelled=lambda: not self.is_running or self.is_paused)
+                self._notify_status("Detecting Unity client and connecting the selected compatibility profile...")
+                self._unity_bridge = UnityBridge(hwnd, cancelled=lambda: not self.is_running or self.is_paused,
+                    profile_id=self.unity_profile_id, allow_experimental=self.allow_experimental_unity_profiles,
+                    profile_store_path=self.unity_profile_store_path)
             elif self._unity_bridge.hwnd != int(hwnd):
                 raise UnityBridgeError("The target changed; stop and start again")
             self._unity_bridge.mouse_action(x, y, button, mode, hold_ms, scroll_clicks, drag_to, drag_ms)
@@ -400,6 +408,9 @@ class AutoClicker:
             return
 
         try:
+            if not bool(action.data.get("__normal_enabled", True)):
+                self._cycle_executed_by_index[action_index] = False
+                return
             if from_pending:
                 if (not force_pending) and (not bool(action.data.get("__invokable_enabled", True))):
                     self._cycle_executed_by_index[action_index] = False
@@ -665,6 +676,8 @@ class AutoClicker:
         for idx, action in enumerate(self.current_script.get_actions()):
             if action.type not in (ClickType.IMAGE, ClickType.IMAGE_DIRECT):
                 continue
+            if not bool(action.data.get("__normal_enabled", True)):
+                continue
             level = int(action.data.get('priority_level', 0) or 0)
             if level > 0:
                 candidates.append((level, idx, action))
@@ -679,6 +692,8 @@ class AutoClicker:
         for level, idx, action in candidates:
             if (not self.is_running) or self.is_paused:
                 break
+            if not bool(action.data.get("__normal_enabled", True)):
+                continue
             if not self._can_execute_by_limit(idx, action):
                 continue
             
@@ -688,6 +703,8 @@ class AutoClicker:
                 continue
             
             if self._is_image_action_triggered(action):
+                if not bool(action.data.get("__normal_enabled", True)):
+                    continue
                 if action.type == ClickType.IMAGE_DIRECT:
                     executed = self._execute_image_direct_click(action)
                 else:

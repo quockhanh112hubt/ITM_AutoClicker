@@ -8,6 +8,7 @@ import uuid
 import threading
 import webbrowser
 import subprocess
+from pathlib import Path
 import urllib.request
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -32,10 +33,12 @@ from src.ui.widgets import ScriptTreeWidget, DragCreateToolButton, DragSelectTar
 from src.screen_action_recorder import ScreenActionRecorder
 from src.app_info import APP_NAME, APP_VERSION, GITHUB_REPO, GITHUB_RELEASES_URL
 from src.update_checker import check_github_update, UpdateInfo, get_ssl_context
+from src.unity_profiles import inspect_client, ProfileStore, select_profile, eligibility, UnityProfileError
 from pynput import mouse
 import win32gui
 import win32con
 import win32api
+import win32process
 
 
 class FloatingPanel(QWidget):
@@ -109,6 +112,7 @@ class MainWindow(QMainWindow):
     status_changed_signal = pyqtSignal(str)
     update_check_completed_signal = pyqtSignal(object)
     update_download_completed_signal = pyqtSignal(object)
+    unity_client_scan_completed_signal = pyqtSignal(object)
     
     def __init__(self):
         super().__init__()
@@ -120,6 +124,11 @@ class MainWindow(QMainWindow):
         
         # Initialize config
         self.config = Config()
+        self.unity_profile_store = ProfileStore(Path(self.config.config_file).with_name("unity_profiles.json"))
+        self._unity_client_info = None
+        self._unity_scan_token = 0
+        self._unity_scan_identity = None
+        self.unity_client_scan_completed_signal.connect(self._on_unity_scan_completed)
         
         # Initialize auto clicker
         self.auto_clicker = AutoClicker(
@@ -131,6 +140,9 @@ class MainWindow(QMainWindow):
             self.config.get("ocr_language", "eng+vie"),
             background_mouse_compatibility=self.config.get("background_mouse_compatibility", False),
             unity_virtual_mouse=self.config.get("unity_virtual_mouse", False),
+            unity_profile_id=self.config.get("unity_profile_id", "auto"),
+            allow_experimental_unity_profiles=self.config.get("allow_experimental_unity_profiles", False),
+            unity_profile_store_path=str(self.unity_profile_store.path),
         )
         self.auto_clicker.set_on_status_changed(self._on_status_changed_from_worker)
         self.auto_clicker.set_on_action_executed(self._on_action_executed_from_worker)
@@ -333,6 +345,8 @@ class MainWindow(QMainWindow):
         # Tab 2: Settings
         settings_tab = self.create_settings_tab()
         self.tabs.addTab(settings_tab, "Settings")
+
+        self.tabs.addTab(self.create_unity_clients_tab(), "Unity Clients")
 
         # Tab 3: About
         about_tab = self.create_about_tab()
@@ -1414,12 +1428,13 @@ class MainWindow(QMainWindow):
         self.background_compatibility_checkbox.toggled.connect(self.on_background_compatibility_changed)
         runtime_layout.addWidget(self.background_compatibility_checkbox)
 
-        self.unity_virtual_mouse_checkbox = QCheckBox("Unity virtual mouse — MongThienKiem (experimental)")
+        self.unity_virtual_mouse_checkbox = QCheckBox("Unity virtual mouse — compatibility profiles")
         self.unity_virtual_mouse_checkbox.setChecked(bool(self.config.get("unity_virtual_mouse", False)))
         self.unity_virtual_mouse_checkbox.setEnabled(not self.auto_clicker.use_real_mouse)
         self.unity_virtual_mouse_checkbox.setToolTip(
-            "Loads an x64 helper into the supported MongThienKiem client when you press Start.\n"
+            "Detects the selected Unity client and loads its x64 helper when you press Start.\n"
             "Provides a virtual mouse without moving your cursor or activating the game.\n"
+            "Choose profiles and inspect compatibility in the Unity Clients tab.\n"
             "Mouse actions only. Stop disables virtual input; restart the game to unload the helper."
         )
         self.unity_virtual_mouse_checkbox.toggled.connect(self.on_unity_virtual_mouse_changed)
@@ -1440,6 +1455,197 @@ class MainWindow(QMainWindow):
         layout.addStretch()
         tab.setLayout(layout)
         return tab
+
+    def create_unity_clients_tab(self):
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        intro = QLabel("Client detection is read-only. Start loads the virtual mouse helper only when Unity virtual mouse is enabled.")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+        self.unity_client_info_label = QLabel("Select a target window in Main to identify its Unity client.")
+        self.unity_client_info_label.setWordWrap(True)
+        self.unity_client_info_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.unity_client_info_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(self.unity_client_info_label)
+        form = QFormLayout()
+        self.unity_profile_combo = QComboBox()
+        self._populate_unity_profiles()
+        self.unity_profile_combo.currentIndexChanged.connect(self.on_unity_profile_changed)
+        form.addRow("Compatibility profile:", self.unity_profile_combo)
+        layout.addLayout(form)
+        self.unity_allow_experimental_checkbox = QCheckBox("Allow experimental Unity profiles")
+        self.unity_allow_experimental_checkbox.setChecked(self.auto_clicker.allow_experimental_unity_profiles)
+        self.unity_allow_experimental_checkbox.setToolTip(
+            "Allows a runtime compatibility probe for eligible IL2CPP x64 / Legacy Input / uGUI clients.\n"
+            "An engine-family match is not a verified game. Unsupported runtimes remain blocked."
+        )
+        self.unity_allow_experimental_checkbox.toggled.connect(self.on_unity_profile_changed)
+        layout.addWidget(self.unity_allow_experimental_checkbox)
+        self.unity_profile_status_label = QLabel("")
+        self.unity_profile_status_label.setWordWrap(True)
+        self.unity_profile_status_label.setTextFormat(Qt.TextFormat.PlainText)
+        layout.addWidget(self.unity_profile_status_label)
+        row = QHBoxLayout()
+        self.unity_refresh_button = QPushButton("Refresh detection")
+        self.unity_refresh_button.clicked.connect(lambda: self._queue_unity_scan(force=True))
+        row.addWidget(self.unity_refresh_button)
+        self.unity_save_button = QPushButton("Save client profile")
+        self.unity_save_button.clicked.connect(lambda: self._save_unity_client_profile(False))
+        row.addWidget(self.unity_save_button)
+        self.unity_tested_button = QPushButton("Mark client as tested")
+        self.unity_tested_button.setToolTip("Use after you have confirmed an action works in this game. Saves a user-tested profile for this exact build.")
+        self.unity_tested_button.clicked.connect(lambda: self._save_unity_client_profile(True))
+        row.addWidget(self.unity_tested_button)
+        self.unity_export_button = QPushButton("Export detection report")
+        self.unity_export_button.clicked.connect(self._export_unity_detection_report)
+        row.addWidget(self.unity_export_button)
+        layout.addLayout(row)
+        note = QLabel("Profiles identify a game build by its Unity version, runtime and native module fingerprints. "
+            "A game update needs a fresh test. Mono, x86 and New Input System-only clients are identified but do not yet have a virtual mouse backend.")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        layout.addStretch()
+        self._refresh_unity_profile_status()
+        return tab
+
+    def _populate_unity_profiles(self, selected=None):
+        combo = self.unity_profile_combo
+        selected = selected or self.config.get("unity_profile_id", "auto")
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("Auto detect", "auto")
+        for profile in self.unity_profile_store.profiles:
+            combo.addItem(f"{profile['name']} [{profile['status']}]", profile["id"])
+        index = combo.findData(selected)
+        if index < 0:
+            combo.addItem(f"Missing saved profile ({selected})", selected)
+            index = combo.count() - 1
+        combo.setCurrentIndex(index)
+        combo.blockSignals(False)
+
+    def on_unity_profile_changed(self, *_):
+        if self.auto_clicker.is_running:
+            self._populate_unity_profiles(self.auto_clicker.unity_profile_id)
+            self.unity_allow_experimental_checkbox.blockSignals(True)
+            self.unity_allow_experimental_checkbox.setChecked(self.auto_clicker.allow_experimental_unity_profiles)
+            self.unity_allow_experimental_checkbox.blockSignals(False)
+            self.statusBar.showMessage("Stop the script before changing Unity profiles")
+            return
+        profile_id = str(self.unity_profile_combo.currentData() or "auto")
+        allow = self.unity_allow_experimental_checkbox.isChecked()
+        self.auto_clicker.unity_profile_id = profile_id
+        self.auto_clicker.allow_experimental_unity_profiles = allow
+        self.config.set("unity_profile_id", profile_id)
+        self.config.set("allow_experimental_unity_profiles", allow)
+        self._refresh_unity_profile_status()
+
+    def _queue_unity_scan(self, force=False):
+        if not hasattr(self, "unity_client_info_label"):
+            return
+        hwnd, _ = self._current_target_info()
+        try:
+            identity = (int(hwnd), int(win32process.GetWindowThreadProcessId(hwnd)[1])) if hwnd else None
+        except Exception:
+            identity = None
+        if not force and identity == self._unity_scan_identity:
+            return
+        self._unity_scan_identity = identity
+        self._unity_scan_token += 1
+        token = self._unity_scan_token
+        self._unity_client_info = None
+        self._refresh_unity_profile_status()
+        if identity is None:
+            self.unity_client_info_label.setText("Select a target window in Main. Full Screen has no per-client profile.")
+            return
+        self.unity_client_info_label.setText("Inspecting selected client...")
+        def worker():
+            try:
+                payload = {"token": token, "info": inspect_client(identity[0]), "identity": identity}
+            except Exception as exc:
+                payload = {"token": token, "error": str(exc), "identity": identity}
+            self.unity_client_scan_completed_signal.emit(payload)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_unity_scan_completed(self, payload):
+        if payload.get("token") != self._unity_scan_token or payload.get("identity") != self._unity_scan_identity:
+            return
+        if payload.get("error"):
+            self.unity_client_info_label.setText("Client detection failed: " + payload["error"])
+            self._unity_client_info = None
+        else:
+            info = payload["info"]
+            self._unity_client_info = info
+            self.unity_client_info_label.setText(
+                f"Client: {info.title}\nExecutable: {info.executable}\nUnity: {info.unity_version} | "
+                f"Architecture: {info.architecture} | Runtime: {info.runtime}\n"
+                f"Input: {info.input_system} | uGUI: {'detected' if info.has_ugui else 'not confirmed'}"
+            )
+        self._refresh_unity_profile_status()
+
+    def _refresh_unity_profile_status(self):
+        if not hasattr(self, "unity_profile_status_label"):
+            return
+        info = self._unity_client_info
+        reason = "Select a target and wait for detection."
+        eligible = False
+        if info:
+            try:
+                profile = select_profile(info, self.unity_profile_store, str(self.unity_profile_combo.currentData() or "auto"))
+                reason = f"Selected: {profile['name']} [{profile['status']}]. "
+                if profile["status"] == "experimental":
+                    reason += ("Runtime trial enabled; actual game compatibility is unverified."
+                        if self.unity_allow_experimental_checkbox.isChecked()
+                        else "Enable Allow experimental Unity profiles to try this client.")
+                else:
+                    reason += "Matches this exact client build."
+            except UnityProfileError as exc:
+                reason = str(exc)
+            eligible = not bool(eligibility(info))
+        if self.unity_profile_store.load_error:
+            reason += " Saved profile file could not be read: " + self.unity_profile_store.load_error
+        self.unity_profile_status_label.setText(reason)
+        for button in (self.unity_save_button, self.unity_tested_button):
+            button.setEnabled(eligible and not self.auto_clicker.is_running)
+        self.unity_export_button.setEnabled(info is not None)
+
+    def _save_unity_client_profile(self, tested=False):
+        if self.auto_clicker.is_running or self._unity_client_info is None:
+            return
+        try:
+            # Reinspect so a build update or reused HWND cannot inherit a test result.
+            info = inspect_client(self._unity_client_info.hwnd)
+            if info.pid != self._unity_client_info.pid or info.fingerprints != self._unity_client_info.fingerprints:
+                self._queue_unity_scan(force=True)
+                raise UnityProfileError("The client changed. Detection was refreshed; test this new build first.")
+            label = Path(info.executable).stem + " " + info.unity_version
+            name, accepted = QInputDialog.getText(self, "Save Unity client profile",
+                "Profile name (use Mark client as tested only after observing a successful action):", text=label)
+            if not accepted:
+                return
+            profile = self.unity_profile_store.save_client(info, str(name), tested=tested)
+            self._populate_unity_profiles(profile["id"])
+            self.on_unity_profile_changed()
+            self.statusBar.showMessage(f"Saved Unity client profile: {profile['name']} [{profile['status']}]")
+        except Exception as exc:
+            QMessageBox.warning(self, "Unity profile", str(exc))
+
+    def _export_unity_detection_report(self):
+        if self._unity_client_info is None:
+            return
+        path, _ = QFileDialog.getSaveFileName(self, "Export Unity client detection", "unity_client_report.json", "JSON (*.json)")
+        if not path:
+            return
+        payload = {"schema_version": 1, "client": self._unity_client_info.report(), "profile_id": self.unity_profile_combo.currentData()}
+        try:
+            profile = select_profile(self._unity_client_info, self.unity_profile_store, payload["profile_id"])
+            payload["selection"] = profile
+        except UnityProfileError as exc:
+            payload["selection_error"] = str(exc)
+        try:
+            Path(path).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            self.statusBar.showMessage("Unity client detection report exported")
+        except OSError as exc:
+            QMessageBox.warning(self, "Export failed", str(exc))
     
     def update_table(self):
         """Update tree list for script branches/actions."""
@@ -2983,6 +3189,7 @@ class MainWindow(QMainWindow):
                             )
                 finally:
                     self._updating_table = False
+                self._sync_runtime_enabled_states()
                 return
             
             if payload[0] == "action":
@@ -3013,8 +3220,25 @@ class MainWindow(QMainWindow):
                             parent.setCheckState(0, Qt.CheckState.Unchecked)
                     finally:
                         self._updating_table = False
+                self._sync_runtime_enabled_states()
                 return
         
+    def _sync_runtime_enabled_states(self):
+        """Apply checkbox changes to every execution path in the running snapshot."""
+        script = self.auto_clicker.current_script
+        if not script or not self.auto_clicker.is_running:
+            return
+        for index, key in enumerate(self._running_action_key_map):
+            if index >= len(script.actions):
+                break
+            item = self._tree_action_items.get(key)
+            enabled = item is not None
+            while item is not None:
+                enabled = enabled and item.checkState(0) != Qt.CheckState.Unchecked
+                item = item.parent()
+            script.actions[index].data["__normal_enabled"] = bool(enabled)
+            script.actions[index].data["__invokable_enabled"] = bool(enabled)
+
     def on_script_tree_item_double_clicked(self, item: QTreeWidgetItem, column: int):
         """Rename branch/action when double-clicking the name column."""
         if item is None:
@@ -3628,6 +3852,7 @@ class MainWindow(QMainWindow):
     
     def _update_run_button_states(self, running: bool):
         """Update Start/Stop button enabled state and visual style."""
+        self._refresh_unity_profile_status()
         is_paused = bool(self.auto_clicker.is_paused) if running else False
         start_active = True
         stop_active = running
@@ -4231,7 +4456,7 @@ class MainWindow(QMainWindow):
 
             # Traverse visible order in tree for deterministic runtime sequence.
             for i in range(group_item.childCount()):
-                add_tree_action_node(group_item.child(i), None, bool(group_enabled), True)
+                add_tree_action_node(group_item.child(i), None, bool(group_enabled), bool(group_enabled))
 
         # Resolve IF runtime references (source image path and branch runtime indices).
         runtime_actions = script.get_actions()
@@ -4669,6 +4894,7 @@ class MainWindow(QMainWindow):
     
     def _update_target_label(self):
         """Update target info label in main tab"""
+        self._queue_unity_scan()
         if not self.target_info_label:
             return
         if self._full_screen_target:

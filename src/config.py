@@ -26,6 +26,8 @@ class Config:
         "github_repo": GITHUB_REPO,
         "background_mouse_compatibility": False,
         "unity_virtual_mouse": False,
+        "unity_profile_id": "auto",
+        "allow_experimental_unity_profiles": False,
     }
     
     def __init__(self, config_file: str = CONFIG_FILE_PATH) -> None:

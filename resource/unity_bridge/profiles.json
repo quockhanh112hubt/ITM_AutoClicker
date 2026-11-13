@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "profiles": [
+    {
+      "id": "mong-thien-kiem-6000.3.25f1",
+      "name": "MongThienKiem 6000.3.25f1",
+      "status": "verified",
+      "backend": "il2cpp-legacy-ugui",
+      "executable": "MongThienKiem.exe",
+      "unity_version": "6000.3.25f1",
+      "fingerprints": {
+        "UnityPlayer.dll": "3fc09d493e387c33b2c0df29d9ec75803158a3a98ad885917b1039d13bfc6c6d",
+        "GameAssembly.dll": "802f3a21bd70ca083b4f1cc748acc6a2c8c32cece75ce38c9ab656a27694cc2d"
+      }
+    },
+    {
+      "id": "unity-legacy-lts-x64",
+      "name": "Unity 2019–2023 / IL2CPP / Legacy UI",
+      "status": "experimental",
+      "backend": "il2cpp-legacy-ugui",
+      "unity_majors": [2019, 2020, 2021, 2022, 2023]
+    },
+    {
+      "id": "unity6-legacy-x64",
+      "name": "Unity 6 / IL2CPP / Legacy UI",
+      "status": "experimental",
+      "backend": "il2cpp-legacy-ugui",
+      "unity_majors": [6000]
+    }
+  ]
+}

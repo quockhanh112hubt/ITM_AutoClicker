@@ -74,29 +74,33 @@ game. Count tăng chỉ thể hiện việc gửi lệnh, cần quan sát menu t
 Chế độ này không bảo đảm hỗ trợ game dùng Raw Input hoặc bỏ qua thông điệp chuột.
 Trình duyệt/Office có thể tiếp tục dùng chế độ mặc định (tắt tùy chọn thử nghiệm).
 
-## Bản thử nghiệm chuột ảo Unity — MongThienKiem
+## Bản thử nghiệm nhận diện client và profile Unity
 
-Đã có helper x64 biên dịch sẵn tại `resource/unity_bridge/itm_unity_bridge.dll`.
-Mở `dist/ITM_AutoClicker_Unity_Test.exe` hoặc chạy bản mã nguồn mới bằng
+Mở `dist/ITM_AutoClicker_Unity_Profiles_Test.exe` hoặc chạy mã nguồn mới bằng
 `.\.venv\Scripts\python.exe main.py`, sau đó:
 
-1. Chọn target **MongThienKiem**, giữ cửa sổ game mở bình thường.
-2. Trong **Settings → Runtime**, tắt **Use real mouse** và bật
-   **Unity virtual mouse — MongThienKiem (experimental)**.
-3. Tạo một action Position/Image Based/Image Direct trên nút mở menu, đặt **Limit = 1**.
-4. Đặt chuột ngoài game, làm việc ở ứng dụng khác rồi dùng phím Home để chạy.
-5. Dùng End/Stop để dừng. Tùy chọn Unity ghi đè Drag Mode bằng kéo thả ảo.
+1. Chọn target trong **Main**; tab **Unity Clients** tự nhận diện phiên bản Unity,
+   x64/x86, IL2CPP/Mono và dấu hiệu Legacy/New Input System.
+2. Giữ **Compatibility profile = Auto detect**. MongThienKiem đúng bản đã kiểm tra
+   dùng profile `verified`. Client khác phù hợp nhóm IL2CPP x64 + Legacy Input/uGUI
+   sẽ có profile `experimental`; bật **Allow experimental Unity profiles** để thử.
+3. Trong **Settings → Runtime**, tắt **Use real mouse** và bật
+   **Unity virtual mouse — compatibility profiles**.
+4. Tạo một action Position/Image Based/Image Direct trên nút mở menu, đặt **Limit = 1**.
+   Đặt chuột ngoài game, chuyển sang ứng dụng khác rồi dùng Home để chạy, End để dừng.
+5. Sau khi quan sát thao tác thành công, dùng **Mark client as tested** để lưu
+   profile `user-tested` cho đúng bản client. **Export detection report** xuất báo cáo JSON khi cần phân tích.
 
-Chế độ này nạp DLL vào tiến trình game được chọn và thay đường đọc Input lúc chạy.
-Stop/ngắt kết nối tắt đầu vào ảo; helper không hoạt động vẫn ở trong game tới khi
-game thoát. Không sửa file game trên đĩa. Chỉ đúng bản MongThienKiem đã khảo sát
-được chấp nhận; bản khác sẽ báo lỗi. Không hỗ trợ action bàn phím, Full Screen hoặc
-cửa sổ game minimize. Tùy chọn Background mouse compatibility là một chế độ khác,
-được bỏ qua khi dùng chuột ảo Unity.
+Các profile tổng quát hiện bao phủ nhóm Unity 2019–2023 và Unity 6 (`6000.x`),
+vẫn cần kiểm thử trên từng game. Mono, x86 và New Input System-only được nhận diện
+nhưng chưa có backend chuột ảo. Không hỗ trợ bàn phím, Full Screen hay game minimize.
 
-Đã thử Image Direct mở menu **Thành tựu** khi chuột ở ngoài game và foreground
-giữ nguyên ở ứng dụng khác. Chưa xác nhận mọi màn hình/action của game.
-Xem [tài liệu build, kiểm tra và giới hạn](native/unity_bridge/README.md).
+Nếu đã dùng bản test MongThienKiem trước đó, **thoát và mở lại game một lần** trước
+khi dùng helper profile mới. Stop tắt đầu vào ảo; DLL không hoạt động vẫn ở trong
+game tới khi game thoát. Không sửa file game trên đĩa.
+
+Xem [hướng dẫn profile và giới hạn](docs/unity_client_profiles.md) hoặc
+[tài liệu build/kiểm tra native](native/unity_bridge/README.md).
 
 ## Cập nhật (Update)
 

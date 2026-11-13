@@ -1,4 +1,4 @@
-/* Experimental, opt-in virtual mouse for the fingerprinted MongThienKiem build.
+/* Experimental, opt-in virtual mouse for profile-selected Unity IL2CPP clients.
  * No global input, cursor movement, foreground activation, or disk patching.
  * MinHook is distributed separately under its included BSD license.
  */
@@ -39,6 +39,11 @@ static ButtonFn original_down, original_up, original_held;
 static UpdateFn original_update;
 static IntFn frame_count, screen_width, screen_height;
 static size_t focus_offset;
+static size_t input_module_offset;
+static void *(*object_class)(void *);
+static const char *(*class_name)(void *);
+static const char *(*class_namespace)(void *);
+static void *(*class_parent)(void *);
 static int cached_frame = -1;
 static uint32_t cached_session;
 static LONG command_seq;
@@ -48,7 +53,7 @@ static Vec3 position;
 static SRWLOCK state_lock = SRWLOCK_INIT;
 
 static bool lease_valid(void) {
-    return g && g->magic == 0x314d5449 && g->version == 1 && g->enabled &&
+    return g && g->magic == 0x314d5449 && g->version == 2 && g->status == 2 && g->enabled &&
            g->owner_pid && GetTickCount64() - g->heartbeat < 1200;
 }
 
@@ -152,6 +157,20 @@ static void virtual_scroll(Vec2 *out) {
     if (!use_virtual) original_scroll(out);
 }
 static void virtual_update(void *instance, const void *method) {
+    if (lease_valid() && input_module_offset) {
+        void *module = *(void **)((unsigned char *)instance + input_module_offset);
+        if (module) {
+            void *klass = object_class(module);
+            for (int depth = 0; klass && depth < 32; depth++, klass = class_parent(klass)) {
+                const char *name = class_name(klass), *space = class_namespace(klass);
+                if ((name && !strcmp(name, "InputSystemUIInputModule")) ||
+                    (space && !strncmp(space, "UnityEngine.InputSystem", 23))) {
+                    InterlockedExchange(&g->status, -9);
+                    break;
+                }
+            }
+        }
+    }
     snapshot();
     InterlockedIncrement(&g->updates);
     AcquireSRWLockShared(&state_lock);
@@ -175,16 +194,25 @@ static bool install(void *target, void *replacement, void **original) {
     return target && MH_CreateHook(target, replacement, original) == MH_OK;
 }
 
+static bool executable_in_module(void *pointer, HMODULE module) {
+    MEMORY_BASIC_INFORMATION info;
+    if (!pointer || VirtualQuery(pointer, &info, sizeof(info)) != sizeof(info)) return false;
+    DWORD protection = info.Protect & 0xff;
+    return info.State == MEM_COMMIT && info.AllocationBase == (void *)module &&
+           !(info.Protect & PAGE_GUARD) && (protection == PAGE_EXECUTE || protection == PAGE_EXECUTE_READ ||
+           protection == PAGE_EXECUTE_READWRITE || protection == PAGE_EXECUTE_WRITECOPY);
+}
+
 static DWORD WINAPI initialize(void *unused) {
     (void)unused;
     wchar_t mapping[96];
-    wsprintfW(mapping, L"Local\\ITMUnityBridge_%lu", GetCurrentProcessId());
+    wsprintfW(mapping, L"Local\\ITMUnityProfiles_%lu", GetCurrentProcessId());
     HANDLE handle = OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, mapping);
     if (!handle) return 1;
     g = (Shared *)MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(Shared));
     if (!g) { CloseHandle(handle); return 2; }
     mapping_handle = handle;
-    if (g->magic != 0x314d5449 || g->version != 1) return 3;
+    if (g->magic != 0x314d5449 || g->version != 2) return 3;
     g->status = 1;
     HMODULE assembly = GetModuleHandleW(L"GameAssembly.dll");
     if (!assembly) { g->status = -1; return 4; }
@@ -200,6 +228,11 @@ static DWORD WINAPI initialize(void *unused) {
     typedef const void *(*Method)(void *, const char *, int);
     typedef void *(*Field)(void *, const char *);
     typedef size_t (*Offset)(void *);
+    typedef void *(*FieldType)(void *);
+    typedef int (*TypeKind)(void *);
+    typedef uint32_t (*InstanceSize)(void *);
+    typedef void *(*ObjectClass)(void *);
+    typedef const char *(*ClassName)(void *);
     API(NoArg, domain_get);
     API(Attach, thread_attach);
     API(Detach, thread_detach);
@@ -210,15 +243,25 @@ static DWORD WINAPI initialize(void *unused) {
     API(Method, class_get_method_from_name);
     API(Field, class_get_field_from_name);
     API(Offset, field_get_offset);
+    API(FieldType, field_get_type);
+    API(TypeKind, type_get_type);
+    API(InstanceSize, class_instance_size);
+    API(ObjectClass, object_get_class);
+    API(ClassName, class_get_name);
+    API(ClassName, class_get_namespace);
+    API(ObjectClass, class_get_parent);
     API(ResolveIcall, resolve_icall);
     if (!domain_get || !thread_attach || !thread_detach || !domain_get_assemblies ||
         !assembly_get_image || !image_get_name || !class_from_name ||
-        !class_get_method_from_name || !class_get_field_from_name || !field_get_offset || !resolve_icall) {
+        !class_get_method_from_name || !class_get_field_from_name || !field_get_offset ||
+        !field_get_type || !type_get_type || !class_instance_size || !resolve_icall ||
+        !object_get_class || !class_get_name || !class_get_namespace || !class_get_parent) {
         g->status = -2; return 5;
     }
     void *domain = domain_get();
     if (!domain) { g->status = -3; return 6; }
     void *thread = thread_attach(domain);
+    if (!thread) { g->status = -3; return 6; }
     size_t count = 0;
     const void **assemblies = domain_get_assemblies(domain, &count);
     void *event_class = NULL;
@@ -234,6 +277,17 @@ static DWORD WINAPI initialize(void *unused) {
     void *focus_field = event_class ? class_get_field_from_name(event_class, "m_HasFocus") : NULL;
     focus_offset = focus_field ? field_get_offset(focus_field) : 0;
     void *update = update_method ? *(void * const *)update_method : NULL;
+    bool field_valid = focus_field && type_get_type(field_get_type(focus_field)) == 0x02 &&
+                       focus_offset >= 16 && focus_offset < class_instance_size(event_class);
+    void *module_field = event_class ? class_get_field_from_name(event_class, "m_CurrentInputModule") : NULL;
+    input_module_offset = module_field ? field_get_offset(module_field) : 0;
+    if (!module_field || input_module_offset < 16 ||
+        input_module_offset + sizeof(void *) > class_instance_size(event_class) ||
+        type_get_type(field_get_type(module_field)) != 0x12) field_valid = false;
+    object_class = object_get_class;
+    class_name = class_get_name;
+    class_namespace = class_get_namespace;
+    class_parent = class_get_parent;
     frame_count = (IntFn)resolve_icall("UnityEngine.Time::get_frameCount()");
     screen_width = (IntFn)resolve_icall("UnityEngine.Screen::get_width()");
     screen_height = (IntFn)resolve_icall("UnityEngine.Screen::get_height()");
@@ -245,6 +299,14 @@ static DWORD WINAPI initialize(void *unused) {
     thread_detach(thread);
     if (!update || focus_offset < 16 || focus_offset > 1024 || !frame_count || !screen_width || !screen_height || !pos || !d || !u || !h || !s) {
         g->status = -4; return 7;
+    }
+    HMODULE player = GetModuleHandleW(L"UnityPlayer.dll");
+    if (!player || !field_valid || !executable_in_module(update, assembly) ||
+        !executable_in_module(pos, player) || !executable_in_module(d, player) ||
+        !executable_in_module(u, player) || !executable_in_module(h, player) ||
+        !executable_in_module(s, player) || !executable_in_module((void *)frame_count, player) ||
+        !executable_in_module((void *)screen_width, player) || !executable_in_module((void *)screen_height, player)) {
+        g->status = -8; return 11;
     }
     MH_STATUS result = MH_Initialize();
     if (result != MH_OK) { g->error_code = result; g->status = -5; return 8; }

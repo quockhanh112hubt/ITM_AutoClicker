@@ -1,5 +1,7 @@
 @echo off
 setlocal
+cd /d "%~dp0"
+if errorlevel 1 exit /b 1
 
 REM ITM AutoClicker build script
 set APP_NAME=ITM_AutoClicker
@@ -32,11 +34,30 @@ if errorlevel 1 (
 )
 
 echo.
-echo [2/6] Preparing bundled OCR engine...
+echo [2/6] Preparing bundled OCR and Unity resources...
 if not exist "resource\tesseract\tesseract.exe" (
     if exist "copy_tesseract.bat" (
         call copy_tesseract.bat
     )
+)
+
+if not exist "resource\unity_bridge\itm_unity_bridge_profiles.dll" (
+    echo ERROR: Unity profiles helper DLL is missing.
+    echo Run: %PYTHON% tools\build_unity_bridge.py
+    exit /b 1
+)
+if not exist "resource\unity_bridge\profiles.json" (
+    echo ERROR: Unity profile registry is missing: resource\unity_bridge\profiles.json
+    exit /b 1
+)
+if not exist "resource\unity_bridge\MINHOOK_LICENSE.txt" (
+    echo ERROR: Unity helper license is missing: resource\unity_bridge\MINHOOK_LICENSE.txt
+    exit /b 1
+)
+%PYTHON% -c "import json; from pathlib import Path; p=json.loads(Path('resource/unity_bridge/profiles.json').read_text(encoding='utf-8-sig')); assert p.get('version') == 1 and p.get('profiles'), 'Invalid Unity profile registry'"
+if errorlevel 1 (
+    echo ERROR: Unity profile registry validation failed.
+    exit /b 1
 )
 if not exist "resource\tesseract\tesseract.exe" (
     echo WARNING: resource\tesseract\tesseract.exe not found.
@@ -54,15 +75,15 @@ if errorlevel 1 (
 )
 
 echo.
-echo [4/6] Cleaning old build folders...
-if exist "build" rmdir /s /q "build"
-if exist "dist" rmdir /s /q "dist"
-if exist "%APP_NAME%.spec" del /q "%APP_NAME%.spec"
+echo [4/6] Preparing release build folder...
+REM Keep native build tools and existing test artifacts. PyInstaller cleans its own cache.
+if not exist "build\release" mkdir "build\release"
 
 echo.
 echo [5/6] Building one-file executable...
 %PYTHON% -m PyInstaller --noconfirm --clean --onefile --windowed ^
   --name "%APP_NAME%" ^
+  --workpath "build\release" ^
   --icon "resource\Icon.ico" ^
   --add-data "qt.conf;." ^
   --add-data "resource;resource" ^
@@ -76,6 +97,10 @@ echo.
 echo [6/6] Renaming artifact with version...
 if exist "dist\%APP_NAME%.exe" (
     copy /y "dist\%APP_NAME%.exe" "dist\%APP_NAME%_v%APP_VERSION%.exe" >nul
+    if errorlevel 1 (
+        echo ERROR: Could not create the versioned executable.
+        exit /b 1
+    )
     echo Build complete:
     echo   dist\%APP_NAME%.exe
     echo   dist\%APP_NAME%_v%APP_VERSION%.exe

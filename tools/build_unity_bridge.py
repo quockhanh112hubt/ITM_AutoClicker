@@ -26,17 +26,17 @@ def main():
     staging = ROOT / "build/unity_bridge_native"
     staging.mkdir(parents=True, exist_ok=True)
     command = [zig, "cc", "-target", "x86_64-windows-gnu", "-O2", "-Wall", "-Wextra",
-               "-shared", "-o", str(staging / "itm_unity_bridge.dll"),
+               "-shared", "-o", str(staging / "itm_unity_bridge_profiles.dll"),
                "-I", str(vendor / "include"), str(source / "bridge.c"),
                *[str(vendor / "src" / name) for name in ("hook.c", "buffer.c", "trampoline.c")],
                str(vendor / "src/hde/hde64.c"), "-luser32"]
     subprocess.run(command, cwd=ROOT, check=True)
     try:
-        shutil.copyfile(staging / "itm_unity_bridge.dll", output / "itm_unity_bridge.dll")
+        shutil.copyfile(staging / "itm_unity_bridge_profiles.dll", output / "itm_unity_bridge_profiles.dll")
     except PermissionError:
         raise SystemExit("The helper is loaded in a game. Exit that game before replacing the DLL.")
     shutil.copyfile(vendor / "LICENSE.txt", output / "MINHOOK_LICENSE.txt")
-    print(output / "itm_unity_bridge.dll")
+    print(output / "itm_unity_bridge_profiles.dll")
 
 
 if __name__ == "__main__":

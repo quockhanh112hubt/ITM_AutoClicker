@@ -8,15 +8,15 @@ from unittest.mock import Mock, patch
 
 from src.auto_clicker import AutoClicker, _BackgroundInputInterrupted
 from src.click_script import ClickAction, ClickScript, ClickType
-from src.unity_bridge import Shared, UnityBridge, UnityBridgeError, UnityBridgeCancelled, _load_helper
+from src.unity_bridge import Shared, UnityBridge, UnityBridgeError, UnityBridgeCancelled, _load_helper, HELPER_NAME
 
 
 class UnityBridgeTests(unittest.TestCase):
     def test_packaged_copy_reuses_only_identical_resident_helper(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            existing = root / "source" / "itm_unity_bridge.dll"
-            packaged = root / "packaged" / "itm_unity_bridge.dll"
+            existing = root / "source" / HELPER_NAME
+            packaged = root / "packaged" / HELPER_NAME
             existing.parent.mkdir()
             packaged.parent.mkdir()
             existing.write_bytes(b"same helper build")

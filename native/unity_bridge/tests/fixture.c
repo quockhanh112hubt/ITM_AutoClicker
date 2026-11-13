@@ -5,9 +5,17 @@
 #include <stdbool.h>
 #include <string.h>
 #include <stddef.h>
+#include <stdint.h>
+#include <stdlib.h>
+
+#define EXPORT __declspec(dllexport)
+#define NOINLINE __declspec(noinline)
+typedef struct { float x, y, z; } Vec3;
+typedef struct { float x, y; } Vec2;
 
 #ifdef FIXTURE_MAIN
 int main(void) {
+    if (!LoadLibraryW(L"UnityPlayer.dll")) return 3;
     HMODULE runtime = LoadLibraryW(L"GameAssembly.dll");
     if (!runtime) return 1;
     void (*tick)(void) = (void (*)(void))GetProcAddress(runtime, "fixture_tick");
@@ -18,24 +26,37 @@ int main(void) {
     fflush(stdout);
     for (;;) { tick(); Sleep(16); }
 }
+#elif defined(FIXTURE_PLAYER)
+static volatile int frame, dummy;
+EXPORT NOINLINE int fixture_frame(void) { return frame; }
+EXPORT NOINLINE void fixture_next_frame(void) { frame++; }
+EXPORT NOINLINE int fixture_width(void) { return 1280 + dummy; }
+EXPORT NOINLINE int fixture_height(void) { return 720 + dummy; }
+EXPORT NOINLINE void fixture_pos(Vec3 *p) { p->x = 111 + dummy; p->y = 222 + dummy; p->z = dummy; }
+EXPORT NOINLINE void fixture_scroll(Vec2 *p) { p->x = dummy; p->y = dummy; }
+EXPORT NOINLINE bool fixture_down(int b) { return dummy == b + 99; }
+EXPORT NOINLINE bool fixture_up(int b) { return dummy == b + 98; }
+EXPORT NOINLINE bool fixture_held(int b) { return dummy == b + 97; }
 #else
-typedef struct { float x, y, z; } Vec3;
-typedef struct { float x, y; } Vec2;
-typedef struct { char padding[16]; bool focused; } Event;
+typedef struct { char padding[16]; bool focused; void *input_module; } Event;
 typedef struct { volatile LONG frames, down, up, focus_updates; float x, y; LONG held; } Observer;
 static Event event;
+static int module_field, module_object;
+static int parent_module;
 static Observer *observer;
-static volatile int frame, dummy;
-#define EXPORT __declspec(dllexport)
-#define NOINLINE __declspec(noinline)
-NOINLINE static int get_frame(void) { return frame; }
-NOINLINE static int get_width(void) { return 1280 + dummy; }
-NOINLINE static int get_height(void) { return 720 + dummy; }
-NOINLINE static void pos(Vec3 *p) { p->x = 111 + dummy; p->y = 222 + dummy; p->z = dummy; }
-NOINLINE static void scroll(Vec2 *p) { p->x = dummy; p->y = dummy; }
-NOINLINE static bool btn_down(int b) { return dummy == b + 99; }
-NOINLINE static bool btn_up(int b) { return dummy == b + 98; }
-NOINLINE static bool btn_held(int b) { return dummy == b + 97; }
+static void (*pos)(Vec3 *);
+static bool (*btn_down)(int), (*btn_up)(int), (*btn_held)(int);
+static int (*get_frame)(void);
+static void (*next_frame)(void);
+static void initialize_player(void) {
+    HMODULE player=GetModuleHandleW(L"UnityPlayer.dll");
+    pos=(void (*)(Vec3 *))(void *)GetProcAddress(player,"fixture_pos");
+    btn_down=(bool (*)(int))(void *)GetProcAddress(player,"fixture_down");
+    btn_up=(bool (*)(int))(void *)GetProcAddress(player,"fixture_up");
+    btn_held=(bool (*)(int))(void *)GetProcAddress(player,"fixture_held");
+    get_frame=(int (*)(void))(void *)GetProcAddress(player,"fixture_frame");
+    next_frame=(void (*)(void))(void *)GetProcAddress(player,"fixture_next_frame");
+}
 NOINLINE static void update(void *object, const void *method) {
     (void)method;
     if (!((Event *)object)->focused || !observer) return;
@@ -64,29 +85,54 @@ EXPORT const void *il2cpp_class_get_method_from_name(void *klass, const char *na
     (void)klass;(void)count;return !strcmp(name,"Update") ? method_info : NULL;
 }
 EXPORT void *il2cpp_class_get_field_from_name(void *klass, const char *name) {
-    (void)klass;return !strcmp(name,"m_HasFocus") ? &event : NULL;
+    (void)klass;
+    if (!strcmp(name,"m_HasFocus")) return &event;
+    if (!strcmp(name,"m_CurrentInputModule")) return &module_field;
+    return NULL;
 }
-EXPORT size_t il2cpp_field_get_offset(void *field) { (void)field;return offsetof(Event,focused); }
+EXPORT size_t il2cpp_field_get_offset(void *field) { return field==&module_field ? offsetof(Event,input_module) : offsetof(Event,focused); }
+EXPORT void *il2cpp_field_get_type(void *field) { return field; }
+EXPORT int il2cpp_type_get_type(void *type) {
+    if (type==&module_field) return 0x12;
+    return getenv("ITM_FIXTURE_BAD_FIELD") ? 0x08 : 0x02;
+}
+EXPORT uint32_t il2cpp_class_instance_size(void *klass) { (void)klass;return sizeof(Event); }
+EXPORT void *il2cpp_object_get_class(void *obj) { return obj; }
+EXPORT const char *il2cpp_class_get_name(void *klass) {
+    if (getenv("ITM_FIXTURE_NEW_INPUT_DERIVED")) return klass==&parent_module ? "InputSystemUIInputModule" : "CustomGameInputModule";
+    return getenv("ITM_FIXTURE_NEW_INPUT") ? "InputSystemUIInputModule" : "StandaloneInputModule";
+}
+EXPORT const char *il2cpp_class_get_namespace(void *klass) {
+    if (getenv("ITM_FIXTURE_NEW_INPUT_DERIVED")) return klass==&parent_module ? "UnityEngine.InputSystem.UI" : "Custom.Game";
+    return getenv("ITM_FIXTURE_NEW_INPUT") ? "UnityEngine.InputSystem.UI" : "UnityEngine.EventSystems";
+}
+EXPORT void *il2cpp_class_get_parent(void *klass) {
+    return getenv("ITM_FIXTURE_NEW_INPUT_DERIVED") && klass!=&parent_module ? &parent_module : NULL;
+}
 EXPORT void *il2cpp_resolve_icall(const char *name) {
-    if (strstr(name,"get_mousePosition_Injected")) return pos;
-    if (strstr(name,"get_mouseScrollDelta_Injected")) return scroll;
-    if (strstr(name,"GetMouseButtonDown")) return btn_down;
-    if (strstr(name,"GetMouseButtonUp")) return btn_up;
-    if (strstr(name,"GetMouseButton(")) return btn_held;
-    if (strstr(name,"get_frameCount")) return get_frame;
-    if (strstr(name,"Screen::get_width")) return get_width;
-    if (strstr(name,"Screen::get_height")) return get_height;
+    const char *symbol=NULL;
+    if (!strcmp(name,"UnityEngine.Input::get_mousePosition_Injected(UnityEngine.Vector3&)")) symbol="fixture_pos";
+    if (!strcmp(name,"UnityEngine.Input::get_mouseScrollDelta_Injected(UnityEngine.Vector2&)")) symbol="fixture_scroll";
+    if (!strcmp(name,"UnityEngine.Input::GetMouseButtonDown(System.Int32)")) symbol="fixture_down";
+    if (!strcmp(name,"UnityEngine.Input::GetMouseButtonUp(System.Int32)")) symbol="fixture_up";
+    if (!strcmp(name,"UnityEngine.Input::GetMouseButton(System.Int32)")) symbol="fixture_held";
+    if (strstr(name,"get_frameCount")) symbol="fixture_frame";
+    if (strstr(name,"Screen::get_width")) symbol="fixture_width";
+    if (strstr(name,"Screen::get_height")) symbol="fixture_height";
+    if (symbol) return (void *)GetProcAddress(GetModuleHandleW(L"UnityPlayer.dll"),symbol);
     return NULL;
 }
 EXPORT void fixture_tick(void) {
+    event.input_module=&module_object;
+    if (!next_frame) initialize_player();
     if (!observer) {
         wchar_t name[96]; wsprintfW(name,L"Local\\ITMUnityFixture_%lu",GetCurrentProcessId());
         HANDLE h=CreateFileMappingW(INVALID_HANDLE_VALUE,NULL,PAGE_READWRITE,0,sizeof(Observer),name);
         /* Intentionally retain the named object's handle for this process. */
         if (h) observer=MapViewOfFile(h,FILE_MAP_ALL_ACCESS,0,0,sizeof(Observer));
     }
-    frame++;
-    if (observer) observer->frames=frame;
+    next_frame();
+    if (observer) observer->frames=get_frame();
     update(&event,NULL);
 }
 #endif
