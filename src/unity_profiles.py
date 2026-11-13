@@ -21,6 +21,13 @@ import win32gui
 import win32process
 
 BACKEND = "il2cpp-legacy-ugui"
+MONO_BACKEND = "mono-legacy-ugui"
+MONO_EXPORTS = frozenset("mono_" + name for name in (
+    "get_root_domain", "thread_attach", "thread_detach", "assembly_foreach", "assembly_get_image",
+    "image_get_name", "class_from_name", "class_get_method_from_name", "class_get_field_from_name",
+    "field_get_offset", "field_get_type", "type_get_type", "class_instance_size", "lookup_internal_call",
+    "compile_method", "object_get_class", "class_get_name", "class_get_namespace", "class_get_parent",
+))
 REQUIRED_EXPORTS = frozenset("il2cpp_" + name for name in (
     "domain_get", "thread_attach", "thread_detach", "domain_get_assemblies",
     "assembly_get_image", "image_get_name", "class_from_name", "class_get_method_from_name",
@@ -196,6 +203,20 @@ def inspect_files(executable: Path, modules: dict[str, str], *, hwnd=0, pid=0, t
         for name, path in (("UnityPlayer.dll", player), ("GameAssembly.dll", assembly)):
             with path.open("rb") as stream:
                 info.fingerprints[name] = hashlib.file_digest(stream, "sha256").hexdigest()
+    if info.runtime == "mono":
+        runtime = info.modules.get("mono-2.0-bdwgc.dll")
+        if not runtime:
+            info.notes.append("Mono runtime library name is not supported yet.")
+        else:
+            runtime = Path(runtime)
+            arch, exports = pe_info(runtime, read_exports=True)
+            info.missing_exports = sorted(MONO_EXPORTS - exports)
+            if arch != info.architecture or pe_info(player)[0] != info.architecture:
+                info.notes.append("The executable and Unity native modules have different architectures.")
+            info.legacy_calls = legacy
+            for name, path in (("UnityPlayer.dll", player), ("mono-2.0-bdwgc.dll", runtime)):
+                with path.open("rb") as stream:
+                    info.fingerprints[name] = hashlib.file_digest(stream, "sha256").hexdigest()
     return info
 
 
@@ -226,18 +247,21 @@ def eligibility(info: ClientInfo) -> str:
         return "This window does not have a loaded UnityPlayer.dll."
     if info.architecture != "x64":
         return f"Detected {info.architecture}; virtual mouse currently supports x64 only."
-    if info.runtime != "il2cpp":
+    if info.runtime not in ("il2cpp", "mono"):
         return f"Detected {info.runtime}; a {info.runtime} input backend is not implemented yet."
+    if info.runtime == "mono" and set(info.fingerprints) != {"UnityPlayer.dll", "mono-2.0-bdwgc.dll"}:
+        return "Mono client requires fingerprints for UnityPlayer.dll and mono-2.0-bdwgc.dll."
     if not re.match(r"^(2019|2020|2021|2022|2023|6000)\.", info.unity_version):
         return f"Unity {info.unity_version} is outside the engine families supported by this test backend."
     if any("not supported" in note or "different architectures" in note for note in info.notes):
         return " ".join(info.notes)
     if info.missing_exports:
-        return "IL2CPP runtime does not expose all required APIs: " + ", ".join(info.missing_exports)
+        return f"{info.runtime} runtime does not expose all required APIs: " + ", ".join(info.missing_exports)
     if info.input_system == "new":
         return "New Input System detected; this backend handles Legacy Input/uGUI only."
     if not info.legacy_calls:
-        return "The expected Legacy Input bindings were not found in GameAssembly.dll."
+        return ("The expected Legacy Input bindings were not found in GameAssembly.dll."
+            if info.runtime == "il2cpp" else "Cannot confirm the Mono Legacy Input assembly.")
     if not info.has_ugui:
         return "Cannot confirm the Unity uGUI assembly; no compatible UI backend is available."
     return ""
@@ -278,7 +302,7 @@ class ProfileStore:
 
     @staticmethod
     def _validate_saved(p):
-        if not isinstance(p, dict) or p.get("backend") != BACKEND:
+        if not isinstance(p, dict) or p.get("backend") not in (BACKEND, MONO_BACKEND):
             raise UnityProfileError("Unknown saved backend")
         if not re.fullmatch(r"client-[a-f0-9]{20}", str(p.get("id", ""))):
             raise UnityProfileError("Invalid saved profile id")
@@ -289,7 +313,8 @@ class ProfileStore:
         if not isinstance(p.get("executable"), str) or Path(p["executable"]).name != p["executable"]:
             raise UnityProfileError("Invalid executable name")
         hashes = p.get("fingerprints", {})
-        if not isinstance(hashes, dict) or set(hashes) != {"UnityPlayer.dll", "GameAssembly.dll"}:
+        module = "mono-2.0-bdwgc.dll" if p["backend"] == MONO_BACKEND else "GameAssembly.dll"
+        if not isinstance(hashes, dict) or set(hashes) != {"UnityPlayer.dll", module}:
             raise UnityProfileError("Saved profiles need both native module fingerprints")
         if any(not re.fullmatch(r"[0-9a-f]{64}", str(value)) for value in hashes.values()):
             raise UnityProfileError("Invalid saved fingerprint")
@@ -308,7 +333,7 @@ class ProfileStore:
             raise UnityProfileError(f"Fix the saved profile file before saving: {self.load_error}")
         profile = {"id": _saved_id(Path(info.executable).name, info.fingerprints),
             "name": name.strip(), "status": "user-tested" if tested else "experimental",
-            "backend": BACKEND, "executable": Path(info.executable).name,
+            "backend": MONO_BACKEND if info.runtime == "mono" else BACKEND, "executable": Path(info.executable).name,
             "unity_version": info.unity_version, "fingerprints": dict(info.fingerprints)}
         self._validate_saved(profile)
         previous = next((p for p in self.custom if p["id"] == profile["id"]), None)
@@ -339,6 +364,8 @@ def _saved_id(executable, fingerprints):
 
 
 def profile_matches(profile, info):
+    if profile.get("backend") != (MONO_BACKEND if info.runtime == "mono" else BACKEND):
+        return False
     if profile.get("fingerprints"):
         return (profile.get("executable", "").casefold() == Path(info.executable).name.casefold()
                 and profile["fingerprints"] == info.fingerprints)

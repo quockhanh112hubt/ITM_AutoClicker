@@ -21,6 +21,7 @@ import win32api
 import win32gui
 import win32process
 from src.unity_profiles import inspect_client, ProfileStore, require_profile, UnityProfileError
+from src.unity_keys import unity_key_code
 
 
 class UnityBridgeError(RuntimeError):
@@ -43,6 +44,12 @@ class Shared(ctypes.Structure):
 
 
 assert ctypes.sizeof(Shared) == 96
+
+class MonoShared(Shared):
+    _fields_ = [("keys", ctypes.c_uint32 * 16), *[(name, ctypes.c_int32) for name in
+        ("key_reads", "client_width", "client_height", "render_width", "render_height", "padding")]]
+
+assert ctypes.sizeof(MonoShared) == 184
 PROTOCOL_VERSION = 2
 MAPPING_PREFIX = "ITMUnityProfiles"
 HELPER_NAME = "itm_unity_bridge_profiles.dll"
@@ -159,6 +166,10 @@ class UnityBridge:
         validated = validate_client(self.hwnd, profile_id, allow_experimental, profile_store_path)
         self.pid, self.client_dir = validated
         self.profile_id = getattr(validated, "profile", {}).get("id", profile_id)
+        self._is_mono = getattr(validated, "profile", {}).get("backend") == "mono-legacy-ugui"
+        shared_type = MonoShared if self._is_mono else Shared
+        protocol = 3 if self._is_mono else PROTOCOL_VERSION
+        prefix = "ITMUnityMono_v1" if self._is_mono else MAPPING_PREFIX
         self._lock = threading.RLock()
         self._stop = threading.Event()
         self._heartbeat_thread = None
@@ -166,19 +177,22 @@ class UnityBridge:
         self._semaphore = None
         self._owns_semaphore = False
         root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
-        helper = (root / "resource/unity_bridge" / HELPER_NAME).resolve()
+        helper = (root / "resource/unity_bridge" / ("itm_unity_mono_v1.dll" if self._is_mono else HELPER_NAME)).resolve()
         if not helper.is_file():
             raise UnityBridgeError("Unity helper DLL is missing. Run: python tools/build_unity_bridge.py")
         try:
-            self._semaphore = _wincheck(kernel.CreateSemaphoreW(None, 1, 1, f"Local\\{MAPPING_PREFIX}Control_{self.pid}"), "Create bridge lock")
+            self._semaphore = _wincheck(kernel.CreateSemaphoreW(None, 1, 1, f"Local\\{prefix}Control_{self.pid}"), "Create bridge lock")
             if kernel.WaitForSingleObject(self._semaphore, 0) != 0:
                 raise UnityBridgeError("Another ITM session controls this game; stop it first")
             self._owns_semaphore = True
-            self._mapping = mmap.mmap(-1, ctypes.sizeof(Shared), tagname=f"Local\\{MAPPING_PREFIX}_{self.pid}")
-            self.shared = Shared.from_buffer(self._mapping)
-            if self.shared.magic not in (0, 0x314D5449) or self.shared.version not in (0, PROTOCOL_VERSION):
+            self._mapping = mmap.mmap(-1, ctypes.sizeof(shared_type), tagname=f"Local\\{prefix}_{self.pid}")
+            self.shared = shared_type.from_buffer(self._mapping)
+            if self.shared.magic not in (0, 0x314D5449) or self.shared.version not in (0, protocol):
                 raise UnityBridgeError("Incompatible helper IPC; restart the game")
-            self.shared.magic, self.shared.version = 0x314D5449, PROTOCOL_VERSION
+            self.shared.magic, self.shared.version = 0x314D5449, protocol
+            if self._is_mono:
+                self.shared.keys[:] = [0] * 16
+                _, _, self.shared.client_width, self.shared.client_height = win32gui.GetClientRect(self.hwnd)
             self.shared.enabled = self.shared.buttons = 0
             self.shared.hwnd = self.hwnd
             self.shared.owner_pid = win32api.GetCurrentProcessId()
@@ -190,7 +204,7 @@ class UnityBridge:
             deadline = time.monotonic() + 10
             while self.shared.status != 2:
                 if self.shared.status < 0:
-                    reasons = {-1: "IL2CPP module missing", -2: "IL2CPP API missing", -3: "Unity domain unavailable",
+                    reasons = {-1: "Unity runtime module missing", -2: "Unity runtime API missing", -3: "Unity domain unavailable",
                         -4: "Legacy Input or uGUI runtime layout does not match", -5: "Hook library unavailable",
                         -6: "An input function cannot be hooked", -7: "Hook activation failed", -8: "Runtime pointer or field validation failed",
                         -9: "The active UI uses New Input System, not Legacy Input"}
@@ -211,16 +225,29 @@ class UnityBridge:
                 if self.shared is not None:
                     self.shared.heartbeat = kernel.GetTickCount64()
 
-    def _command(self, x, y, buttons, wheel=0, enabled=True):
+    def _command(self, x, y, buttons, wheel=0, enabled=True, keys=()):
         with self._lock:
             if self.shared is None:
                 raise UnityBridgeError("Unity bridge is disconnected")
             state = self.shared
+            bits = None
+            if isinstance(state, MonoShared):
+                bits = [0] * 16
+                for key in keys:
+                    if not 0 <= key < 512:
+                        raise UnityBridgeError(f"Invalid Unity KeyCode: {key}")
+                    bits[key // 32] |= 1 << (key % 32)
+                if enabled:
+                    _, _, width, height = win32gui.GetClientRect(self.hwnd)
             # This x64-only protocol has one writer (the named semaphore),
             # aligned 32-bit sequence stores, and x86 store ordering.
             state.seq += 1
             state.x, state.y = int(x), int(y)
             state.buttons, state.wheel = int(buttons), int(wheel)
+            if bits is not None:
+                state.keys[:] = bits
+                if enabled:
+                    state.client_width, state.client_height = width, height
             state.enabled = int(enabled)
             state.heartbeat = kernel.GetTickCount64()
             state.seq += 1
@@ -300,11 +327,50 @@ class UnityBridge:
             if self.shared is not None:
                 self._command(self.shared.x, self.shared.y, 0, enabled=False)
 
+    def key_action(self, mode, key_name="", hotkey_keys=(), hold_ms=1000):
+        if not self._is_mono:
+            raise UnityBridgeError("Virtual keyboard currently requires a Unity Mono profile")
+        if mode not in ("key_press", "key_hold", "key_hold_true", "hotkey"):
+            raise UnityBridgeError(f"Unsupported Unity keyboard action: {mode}")
+        try:
+            codes = [unity_key_code(k) for k in (hotkey_keys if mode == "hotkey" else [key_name])]
+        except ValueError as exc:
+            raise UnityBridgeError(str(exc)) from exc
+        if not codes:
+            raise UnityBridgeError("Unity keyboard action has no keys")
+        if self.cancelled():
+            raise UnityBridgeCancelled("Unity action cancelled")
+        state = self.shared
+        x, y = state.x, state.y
+        before = state.key_reads
+        try:
+            self._wait_ack(self._command(x, y, 0))
+            self._sleep(0.04)
+            if mode == "key_hold":
+                deadline = time.monotonic() + max(0, hold_ms) / 1000
+                while True:
+                    self._wait_ack(self._command(x, y, 0, keys=codes))
+                    self._sleep(0.06)
+                    self._wait_ack(self._command(x, y, 0))
+                    self._sleep(0.04)
+                    if time.monotonic() >= deadline:
+                        break
+            else:
+                self._wait_ack(self._command(x, y, 0, keys=codes))
+                self._sleep(max(0.06, hold_ms / 1000) if mode == "key_hold_true" else 0.08)
+            self._wait_ack(self._command(x, y, 0))
+            self._sleep(0.04)
+            if state.key_reads <= before:
+                raise UnityBridgeError("This scene did not read Unity Legacy GetKey; its keyboard path is not supported")
+        finally:
+            self.release()
+
     def diagnostics(self):
         with self._lock:
             if self.shared is None:
                 return {"connected": False}
-            return {"connected": True, "profile_id": self.profile_id, **{name: getattr(self.shared, name) for name in
+            extra = {name: getattr(self.shared, name) for name in ("key_reads", "client_width", "client_height", "render_width", "render_height")} if isinstance(self.shared, MonoShared) else {}
+            return {"connected": True, "profile_id": self.profile_id, **extra, **{name: getattr(self.shared, name) for name in
                     ("status", "frame", "ack", "position_reads", "button_reads", "updates", "focus_overrides")}}
 
     def close(self):

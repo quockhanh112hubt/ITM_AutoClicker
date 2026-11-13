@@ -270,9 +270,10 @@ class AutoClicker:
                     if not action.data.get("target_hwnd"):
                         raise ValueError("Unity virtual mouse requires a supported game window; Full Screen is not supported")
                     if str(action.data.get("action_mode", "mouse_click")).lower() not in (
-                        "mouse_click", "mouse_hold", "mouse_scroll", "mouse_drag"
+                        "mouse_click", "mouse_hold", "mouse_scroll", "mouse_drag",
+                        "key_press", "key_hold", "key_hold_true", "hotkey"
                     ):
-                        raise ValueError("The Unity prototype supports mouse actions only; unselect keyboard actions")
+                        raise ValueError("Unsupported Unity action mode")
         
         self.current_script = script
         self._terminal_error = ""
@@ -1740,8 +1741,27 @@ class AutoClicker:
     def _execute_key_action(self, action: ClickAction, target_hwnd: Optional[int] = None) -> bool:
         """Execute keyboard action types: key_press, hotkey, key_hold."""
         if self.unity_virtual_mouse:
-            self.is_running = False
-            raise UnityBridgeError("Unity virtual mouse prototype does not support keyboard actions")
+            try:
+                if not target_hwnd:
+                    raise UnityBridgeError("Unity virtual keyboard requires a game window")
+                if self._unity_bridge is None:
+                    self._unity_bridge = UnityBridge(target_hwnd, cancelled=lambda: not self.is_running or self.is_paused,
+                        profile_id=self.unity_profile_id, allow_experimental=self.allow_experimental_unity_profiles,
+                        profile_store_path=self.unity_profile_store_path)
+                elif self._unity_bridge.hwnd != int(target_hwnd):
+                    raise UnityBridgeError("The target changed; stop and start again")
+                self._unity_bridge.key_action(str(action.data.get('action_mode', '')).lower(),
+                    str(action.data.get('key_name', '')).lower(), action.data.get('hotkey_keys') or [],
+                    int(action.data.get('hold_ms', 1000) or 1000))
+                AppLogger.debug(f"Unity virtual keyboard consumed: {self._unity_bridge.diagnostics()}")
+                return True
+            except UnityBridgeCancelled:
+                raise _BackgroundInputInterrupted()
+            except Exception as exc:
+                self._terminal_error = f"Unity virtual keyboard error: {exc}"
+                AppLogger.error(self._terminal_error)
+                self.is_running = False
+                raise
         mode = str(action.data.get('action_mode', '')).lower()
         key_name = str(action.data.get('key_name', '')).lower()
         hotkey_keys = action.data.get('hotkey_keys') or []

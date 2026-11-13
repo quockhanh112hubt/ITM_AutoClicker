@@ -15,17 +15,47 @@
     },
     {
       "id": "unity-legacy-lts-x64",
-      "name": "Unity 2019–2023 / IL2CPP / Legacy UI",
+      "name": "Unity 2019â€“2023 / IL2CPP / Legacy UI",
       "status": "experimental",
       "backend": "il2cpp-legacy-ugui",
-      "unity_majors": [2019, 2020, 2021, 2022, 2023]
+      "unity_majors": [
+        2019,
+        2020,
+        2021,
+        2022,
+        2023
+      ]
     },
     {
       "id": "unity6-legacy-x64",
       "name": "Unity 6 / IL2CPP / Legacy UI",
       "status": "experimental",
       "backend": "il2cpp-legacy-ugui",
-      "unity_majors": [6000]
+      "unity_majors": [
+        6000
+      ]
+    },
+    {
+      "id": "unity-mono-legacy-x64",
+      "name": "Unity 2019-2023 / Mono / Legacy UI (mouse + keys)",
+      "status": "experimental",
+      "backend": "mono-legacy-ugui",
+      "unity_majors": [
+        2019,
+        2020,
+        2021,
+        2022,
+        2023
+      ]
+    },
+    {
+      "id": "unity6-mono-legacy-x64",
+      "name": "Unity 6 / Mono / Legacy UI (mouse + keys)",
+      "status": "experimental",
+      "backend": "mono-legacy-ugui",
+      "unity_majors": [
+        6000
+      ]
     }
   ]
 }

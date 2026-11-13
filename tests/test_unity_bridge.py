@@ -47,8 +47,8 @@ class UnityBridgeTests(unittest.TestCase):
         self.assertTrue(engine.is_running)
         engine.is_running = False
 
-    def test_keyboard_and_full_screen_rejected_before_threads(self):
-        for data in ({"target_hwnd": None}, {"target_hwnd": 1, "action_mode": "key_press"}):
+    def test_invalid_mode_and_full_screen_rejected_before_threads(self):
+        for data in ({"target_hwnd": None}, {"target_hwnd": 1, "action_mode": "unsupported"}):
             with self.subTest(data=data):
                 engine = AutoClicker(unity_virtual_mouse=True)
                 script = ClickScript()

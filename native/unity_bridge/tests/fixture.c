@@ -16,11 +16,21 @@ typedef struct { float x, y; } Vec2;
 #ifdef FIXTURE_MAIN
 int main(void) {
     if (!LoadLibraryW(L"UnityPlayer.dll")) return 3;
+#ifdef FIXTURE_MONO
+    HMODULE runtime = LoadLibraryW(L"mono-2.0-bdwgc.dll");
+#else
     HMODULE runtime = LoadLibraryW(L"GameAssembly.dll");
+#endif
     if (!runtime) return 1;
     void (*tick)(void) = (void (*)(void))GetProcAddress(runtime, "fixture_tick");
     HWND window = CreateWindowExW(WS_EX_NOACTIVATE, L"STATIC", L"ITM native fixture", WS_POPUP,
-                                  -9000, -9000, 1280, 720, NULL, NULL, NULL, NULL);
+                                  -9000, -9000,
+#ifdef FIXTURE_MONO
+                                  960, 540,
+#else
+                                  1280, 720,
+#endif
+                                  NULL, NULL, NULL, NULL);
     if (!window || !tick) return 2;
     printf("%lu %llu\n", GetCurrentProcessId(), (unsigned long long)(uintptr_t)window);
     fflush(stdout);
@@ -37,9 +47,13 @@ EXPORT NOINLINE void fixture_scroll(Vec2 *p) { p->x = dummy; p->y = dummy; }
 EXPORT NOINLINE bool fixture_down(int b) { return dummy == b + 99; }
 EXPORT NOINLINE bool fixture_up(int b) { return dummy == b + 98; }
 EXPORT NOINLINE bool fixture_held(int b) { return dummy == b + 97; }
+EXPORT NOINLINE bool fixture_key_down(int b) { return dummy == b + 96; }
+EXPORT NOINLINE bool fixture_key_up(int b) { return dummy == b + 95; }
+EXPORT NOINLINE bool fixture_key_held(int b) { return dummy == b + 94; }
 #else
 typedef struct { char padding[16]; bool focused; void *input_module; } Event;
-typedef struct { volatile LONG frames, down, up, focus_updates; float x, y; LONG held; } Observer;
+typedef struct { volatile LONG frames, down, up, focus_updates; float x, y; LONG held;
+    LONG key_down, key_up, key_held, hotkey_frames; } Observer;
 static Event event;
 static int module_field, module_object;
 static int parent_module;
@@ -48,6 +62,9 @@ static void (*pos)(Vec3 *);
 static bool (*btn_down)(int), (*btn_up)(int), (*btn_held)(int);
 static int (*get_frame)(void);
 static void (*next_frame)(void);
+#ifdef FIXTURE_MONO
+static bool (*key_down)(int), (*key_up)(int), (*key_held)(int);
+#endif
 static void initialize_player(void) {
     HMODULE player=GetModuleHandleW(L"UnityPlayer.dll");
     pos=(void (*)(Vec3 *))(void *)GetProcAddress(player,"fixture_pos");
@@ -56,6 +73,11 @@ static void initialize_player(void) {
     btn_held=(bool (*)(int))(void *)GetProcAddress(player,"fixture_held");
     get_frame=(int (*)(void))(void *)GetProcAddress(player,"fixture_frame");
     next_frame=(void (*)(void))(void *)GetProcAddress(player,"fixture_next_frame");
+#ifdef FIXTURE_MONO
+    key_down=(bool (*)(int))(void *)GetProcAddress(player,"fixture_key_down");
+    key_up=(bool (*)(int))(void *)GetProcAddress(player,"fixture_key_up");
+    key_held=(bool (*)(int))(void *)GetProcAddress(player,"fixture_key_held");
+#endif
 }
 NOINLINE static void update(void *object, const void *method) {
     (void)method;
@@ -67,6 +89,12 @@ NOINLINE static void update(void *object, const void *method) {
     if (btn_down(0)) observer->down++;
     if (btn_up(0)) observer->up++;
     observer->held = btn_held(0);
+#ifdef FIXTURE_MONO
+    if (key_down(27)) observer->key_down++;
+    if (key_up(27)) observer->key_up++;
+    observer->key_held = key_held(27);
+    if (key_held(306) && key_down(114)) observer->hotkey_frames++;
+#endif
 }
 static void *method_info[] = {update};
 EXPORT void *il2cpp_domain_get(void) { return &event; }
@@ -122,6 +150,47 @@ EXPORT void *il2cpp_resolve_icall(const char *name) {
     if (symbol) return (void *)GetProcAddress(GetModuleHandleW(L"UnityPlayer.dll"),symbol);
     return NULL;
 }
+#ifdef FIXTURE_MONO
+EXPORT void *mono_get_root_domain(void) { return &event; }
+EXPORT void *mono_thread_attach(void *p) { return p; }
+EXPORT void mono_thread_detach(void *p) { (void)p; }
+EXPORT void mono_assembly_foreach(void (*cb)(void *,void *), void *data) {
+    cb("UnityEngine.UI.dll",data); cb("UnityEngine.InputLegacyModule.dll",data); cb("UnityEngine.CoreModule.dll",data);
+}
+EXPORT void *mono_assembly_get_image(void *p) { return p; }
+EXPORT const char *mono_image_get_name(void *p) { return p; }
+EXPORT void *mono_class_from_name(void *image,const char *space,const char *name) {
+    (void)image;(void)space;(void)name;return &event;
+}
+EXPORT void *mono_class_get_method_from_name(void *klass,const char *name,int count) {
+    (void)klass;(void)count;return (void *)name;
+}
+EXPORT void *mono_compile_method(void *method) { (void)method; return update; }
+EXPORT void *mono_lookup_internal_call(void *method) {
+    const char *name=method,*symbol=NULL;
+    if (!strcmp(name,"get_mousePosition_Injected")) symbol="fixture_pos";
+    if (!strcmp(name,"get_mouseScrollDelta_Injected")) symbol="fixture_scroll";
+    if (!strcmp(name,"GetMouseButtonDown")) symbol="fixture_down";
+    if (!strcmp(name,"GetMouseButtonUp")) symbol="fixture_up";
+    if (!strcmp(name,"GetMouseButton")) symbol="fixture_held";
+    if (!strcmp(name,"GetKeyDownInt")) symbol="fixture_key_down";
+    if (!strcmp(name,"GetKeyUpInt")) symbol="fixture_key_up";
+    if (!strcmp(name,"GetKeyInt")) symbol="fixture_key_held";
+    if (!strcmp(name,"get_frameCount")) symbol="fixture_frame";
+    if (!strcmp(name,"get_width")) symbol="fixture_width";
+    if (!strcmp(name,"get_height")) symbol="fixture_height";
+    return symbol ? (void *)GetProcAddress(GetModuleHandleW(L"UnityPlayer.dll"),symbol) : NULL;
+}
+EXPORT void *mono_class_get_field_from_name(void *k,const char *n) { return il2cpp_class_get_field_from_name(k,n); }
+EXPORT int mono_field_get_offset(void *p) { return (int)il2cpp_field_get_offset(p); }
+EXPORT void *mono_field_get_type(void *p) { return p; }
+EXPORT int mono_type_get_type(void *p) { return il2cpp_type_get_type(p); }
+EXPORT uint32_t mono_class_instance_size(void *p,uint32_t *align) { *align=8;return il2cpp_class_instance_size(p); }
+EXPORT void *mono_object_get_class(void *p) { return p; }
+EXPORT const char *mono_class_get_name(void *p) { return il2cpp_class_get_name(p); }
+EXPORT const char *mono_class_get_namespace(void *p) { return il2cpp_class_get_namespace(p); }
+EXPORT void *mono_class_get_parent(void *p) { return il2cpp_class_get_parent(p); }
+#endif
 EXPORT void fixture_tick(void) {
     event.input_module=&module_object;
     if (!next_frame) initialize_player();

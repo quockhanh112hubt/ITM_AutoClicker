@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import (
     QAbstractItemView, QSystemTrayIcon
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QEvent
-from PyQt6.QtGui import QFont, QPixmap, QIcon, QCursor, QColor, QBrush, QGuiApplication, QPainter, QPainterPath, QPen
+from PyQt6.QtGui import QFont, QPixmap, QIcon, QCursor, QColor, QBrush, QGuiApplication, QPainter, QPainterPath, QPen, QPalette
 from src.click_script import ClickScript, ClickAction, ClickType
 from src.config import Config
 from src.auto_clicker import AutoClicker
@@ -1435,7 +1435,8 @@ class MainWindow(QMainWindow):
             "Detects the selected Unity client and loads its x64 helper when you press Start.\n"
             "Provides a virtual mouse without moving your cursor or activating the game.\n"
             "Choose profiles and inspect compatibility in the Unity Clients tab.\n"
-            "Mouse actions only. Stop disables virtual input; restart the game to unload the helper."
+            "Mono profiles also support Legacy GetKey keyboard actions.\n"
+            "Stop releases virtual input; restart the game to unload the helper."
         )
         self.unity_virtual_mouse_checkbox.toggled.connect(self.on_unity_virtual_mouse_changed)
         runtime_layout.addWidget(self.unity_virtual_mouse_checkbox)
@@ -1458,7 +1459,93 @@ class MainWindow(QMainWindow):
 
     def create_unity_clients_tab(self):
         tab = QWidget()
+        # Match the application's light tab surface even when Windows supplies
+        # a dark palette. Native checkbox indicators also inherit these roles.
+        palette = tab.palette()
+        for role, color in (
+            (QPalette.ColorRole.Window, "#f7f9fc"),
+            (QPalette.ColorRole.WindowText, "#1a2734"),
+            (QPalette.ColorRole.Base, "#ffffff"),
+            (QPalette.ColorRole.AlternateBase, "#edf2f7"),
+            (QPalette.ColorRole.Text, "#1a2734"),
+            (QPalette.ColorRole.Button, "#ffffff"),
+            (QPalette.ColorRole.ButtonText, "#1a2734"),
+            (QPalette.ColorRole.Highlight, "#1565c0"),
+            (QPalette.ColorRole.HighlightedText, "#ffffff"),
+            (QPalette.ColorRole.ToolTipBase, "#ffffff"),
+            (QPalette.ColorRole.ToolTipText, "#1a2734"),
+        ):
+            palette.setColor(role, QColor(color))
+        for role in (QPalette.ColorRole.WindowText, QPalette.ColorRole.Text, QPalette.ColorRole.ButtonText):
+            palette.setColor(QPalette.ColorGroup.Disabled, role, QColor("#526171"))
+        tab.setPalette(palette)
+        tab.setStyleSheet("""
+            QWidget {
+                background: #f7f9fc;
+                color: #1a2734;
+                font-family: "Segoe UI";
+            }
+            QLabel, QCheckBox { background: transparent; }
+            QCheckBox { spacing: 7px; }
+            QCheckBox::indicator {
+                width: 16px;
+                height: 16px;
+                border: 1px solid #718096;
+                border-radius: 3px;
+                background: #ffffff;
+            }
+            QCheckBox::indicator:checked {
+                background: #1565c0;
+                border-color: #1565c0;
+                image: url("@UNITY_CHECKED_ICON@");
+            }
+            QCheckBox::indicator:hover { border-color: #1565c0; }
+            QCheckBox::indicator:disabled { border-color: #a3afbd; }
+            QComboBox {
+                background: #ffffff;
+                color: #1a2734;
+                border: 1px solid #b9c4d1;
+                border-radius: 6px;
+                padding: 5px 8px;
+                min-height: 26px;
+            }
+            QComboBox:hover { border-color: #8fb3d9; }
+            QComboBox:focus { border: 2px solid #1565c0; }
+            QComboBox QAbstractItemView {
+                background: #ffffff;
+                color: #1a2734;
+                selection-background-color: #1565c0;
+                selection-color: #ffffff;
+                border: 1px solid #b9c4d1;
+            }
+            QComboBox QAbstractItemView::item { min-height: 28px; }
+            QPushButton {
+                background: #ffffff;
+                color: #1a2734;
+                border: 1px solid #b9c4d1;
+                border-radius: 6px;
+                padding: 7px 12px;
+                min-height: 24px;
+            }
+            QPushButton:hover { background: #e8f1fc; border-color: #8fb3d9; }
+            QPushButton:pressed { background: #d8e8fa; }
+            QPushButton:focus { border: 2px solid #1565c0; }
+            QPushButton:disabled, QComboBox:disabled {
+                background: #edf1f5;
+                color: #526171;
+                border-color: #c7d0db;
+            }
+            QCheckBox:disabled { color: #526171; }
+            QToolTip {
+                background: #ffffff;
+                color: #1a2734;
+                border: 1px solid #b9c4d1;
+            }
+        """.replace("@UNITY_CHECKED_ICON@",
+            self._resource_path(os.path.join("resource", "checkbox_checked.png")).replace("\\", "/")))
         layout = QVBoxLayout(tab)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(14)
         intro = QLabel("Client detection is read-only. Start loads the virtual mouse helper only when Unity virtual mouse is enabled.")
         intro.setWordWrap(True)
         layout.addWidget(intro)
@@ -1476,7 +1563,7 @@ class MainWindow(QMainWindow):
         self.unity_allow_experimental_checkbox = QCheckBox("Allow experimental Unity profiles")
         self.unity_allow_experimental_checkbox.setChecked(self.auto_clicker.allow_experimental_unity_profiles)
         self.unity_allow_experimental_checkbox.setToolTip(
-            "Allows a runtime compatibility probe for eligible IL2CPP x64 / Legacy Input / uGUI clients.\n"
+            "Allows a runtime compatibility probe for eligible IL2CPP or Mono x64 / Legacy Input / uGUI clients.\n"
             "An engine-family match is not a verified game. Unsupported runtimes remain blocked."
         )
         self.unity_allow_experimental_checkbox.toggled.connect(self.on_unity_profile_changed)
@@ -1501,7 +1588,8 @@ class MainWindow(QMainWindow):
         row.addWidget(self.unity_export_button)
         layout.addLayout(row)
         note = QLabel("Profiles identify a game build by its Unity version, runtime and native module fingerprints. "
-            "A game update needs a fresh test. Mono, x86 and New Input System-only clients are identified but do not yet have a virtual mouse backend.")
+            "A game update needs a fresh test. Mono profiles support Legacy Input mouse and keyboard actions. "
+            "x86, ARM and New Input System-only clients do not yet have a virtual input backend.")
         note.setWordWrap(True)
         layout.addWidget(note)
         layout.addStretch()

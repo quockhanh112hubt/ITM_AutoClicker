@@ -46,6 +46,11 @@ if not exist "resource\unity_bridge\itm_unity_bridge_profiles.dll" (
     echo Run: %PYTHON% tools\build_unity_bridge.py
     exit /b 1
 )
+if not exist "resource\unity_bridge\itm_unity_mono_v1.dll" (
+    echo ERROR: Unity Mono helper DLL is missing.
+    echo Run: %PYTHON% tools\build_unity_bridge.py --backend mono
+    exit /b 1
+)
 if not exist "resource\unity_bridge\profiles.json" (
     echo ERROR: Unity profile registry is missing: resource\unity_bridge\profiles.json
     exit /b 1

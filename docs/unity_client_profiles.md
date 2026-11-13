@@ -8,7 +8,7 @@ Chạy `dist/ITM_AutoClicker_Unity_Profiles_Test.exe` hoặc
 chặn giao diện. Refresh detection quét lại sau khi client cập nhật hoặc thay đổi.
 
 Việc nhận diện, chọn profile và xuất báo cáo chỉ đọc dữ liệu. Helper chỉ được nạp
-khi Start chạy action chuột với tùy chọn Unity virtual mouse đã bật.
+khi Start chạy action chuột hoặc phím với tùy chọn Unity virtual mouse đã bật.
 
 | Nội dung hiển thị | Ý nghĩa |
 | --- | --- |
@@ -30,6 +30,7 @@ Các kết quả này là nhận diện tĩnh; native helper còn kiểm tra run
 | MongThienKiem 6000.3.25f1 | Tên EXE và SHA-256 của UnityPlayer.dll/GameAssembly.dll phải khớp | verified: bản client đã thử trước đây |
 | Unity 2019–2023 / IL2CPP / Legacy UI | Unity 2019.x–2023.x, x64, IL2CPP, có binding Legacy Input và uGUI | experimental |
 | Unity 6 / IL2CPP / Legacy UI | Unity 6000.x, x64, IL2CPP, có binding Legacy Input và uGUI | experimental |
+| Unity 2019–2023 hoặc Unity 6 / Mono / Legacy UI | x64, mono-2.0-bdwgc.dll, Legacy Input và uGUI; chuột và GetKey | experimental |
 | Client đã lưu | Tên EXE và hai SHA-256 đúng bản game đã lưu | experimental hoặc user-tested |
 
 **Auto detect** ưu tiên bản verified, tiếp theo bản user-tested khớp chính xác,
@@ -57,9 +58,10 @@ kiến trúc, backend, API, kiểu trường dữ liệu hay địa chỉ hàm.
    experimental và cần opt-in khi dùng.
 
 Tùy chọn Unity dùng đầu vào ảo cho click/hold/scroll/drag và ghi đè cấu hình Real
-drag đã lưu. Không tự đổi sang chuột thật khi lỗi. Bàn phím, Full Screen và cửa sổ
-minimize chưa được hỗ trợ. Game dùng Mono/x86/ARM/New Input System-only được nhận
-diện nhưng sẽ báo rõ chưa có backend phù hợp.
+drag đã lưu. Không tự đổi sang chuột thật khi lỗi. Backend Mono bổ sung nhấn phím,
+giữ lặp, giữ liên tục và tổ hợp phím qua Legacy GetKey. Backend IL2CPP hiện chỉ có
+chuột. Full Screen, cửa sổ minimize, x86/ARM và New Input System-only chưa được hỗ trợ.
+Xem [hướng dẫn chạy thử Unity Mono bằng F5](unity_mono_test.md).
 
 ## Lưu và cập nhật profile
 
@@ -94,7 +96,7 @@ thực thi của đúng module. Khi scene dùng InputSystemUIInputModule, thử 
 dừng trước lần nhấn nút. Khi scene không đọc Legacy Input ảo, bước hover cũng dừng.
 
 Các kiểm tra runtime tăng khả năng phát hiện không tương thích nhưng không bảo đảm
-mọi game Unity hoạt động. Chưa có backend riêng cho Mono/New Input System.
+mọi game Unity hoạt động. Mono có backend riêng; New Input System chưa có backend.
 
 ## Bằng chứng kiểm tra của bản profile
 

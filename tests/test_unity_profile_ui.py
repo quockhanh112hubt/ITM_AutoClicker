@@ -19,6 +19,19 @@ from test_unity_profiles import candidate
 
 
 class UnityProfileUITests(unittest.TestCase):
+    def test_mono_detection_selects_separate_profile_and_enables_save(self):
+        w = self.window
+        info = candidate()
+        info.runtime = "mono"
+        info.fingerprints = {"UnityPlayer.dll": "a" * 64, "mono-2.0-bdwgc.dll": "b" * 64}
+        w._unity_scan_token = 3
+        w._unity_scan_identity = (123, 456)
+        w._on_unity_scan_completed({"token": 3, "identity": (123, 456), "info": info})
+        self.assertIn("Mono", w.unity_profile_status_label.text())
+        self.assertIn("Runtime: mono", w.unity_client_info_label.text())
+        self.assertTrue(w.unity_save_button.isEnabled())
+        self.assertTrue(w.unity_tested_button.isEnabled())
+
     def test_unchecking_branch_and_action_updates_running_snapshot(self):
         w = self.window
         w._add_action_to_selected_branch(ClickAction(ClickType.IMAGE_DIRECT, priority_level=1))

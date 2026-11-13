@@ -19,8 +19,18 @@ typedef struct {
     volatile ULONGLONG heartbeat;
     volatile LONG native_session, frame, position_reads, button_reads;
     volatile LONG updates, focus_overrides, error_code, reserved;
+#ifdef MONO_BACKEND
+    uint32_t keys[16];
+    volatile LONG key_reads, client_width, client_height, render_width, render_height, padding;
+#endif
 } Shared;
+#ifdef MONO_BACKEND
+_Static_assert(sizeof(Shared) == 184, "Mono IPC layout mismatch");
+#define IPC_VERSION 3
+#else
 _Static_assert(sizeof(Shared) == 96, "IPC layout mismatch");
+#define IPC_VERSION 2
+#endif
 typedef struct { float x, y, z; } Vec3;
 typedef struct { float x, y; } Vec2;
 typedef void *(*ResolveIcall)(const char *);
@@ -51,9 +61,12 @@ static int held, down, up, wheel;
 static bool active;
 static Vec3 position;
 static SRWLOCK state_lock = SRWLOCK_INIT;
+#ifdef MONO_BACKEND
+static uint32_t held_keys[16], down_keys[16], up_keys[16];
+#endif
 
 static bool lease_valid(void) {
-    return g && g->magic == 0x314d5449 && g->version == 2 && g->status == 2 && g->enabled &&
+    return g && g->magic == 0x314d5449 && g->version == IPC_VERSION && g->status == 2 && g->enabled &&
            g->owner_pid && GetTickCount64() - g->heartbeat < 1200;
 }
 
@@ -70,12 +83,20 @@ static void snapshot(void) {
     InterlockedExchange(&g->frame, frame);
     bool valid = lease_valid();
     int previous = held;
+#ifdef MONO_BACKEND
+    uint32_t desired_keys[16];
+    memcpy(desired_keys, held_keys, sizeof(desired_keys));
+#endif
     if (valid) {
         LONG seq = g->seq;
         if (!(seq & 1)) {
             MemoryBarrier();
             LONG x = g->x, y = g->y, desired = g->buttons, requested_wheel = g->wheel;
             uint32_t session = g->session;
+#ifdef MONO_BACKEND
+            uint32_t requested_keys[16];
+            memcpy(requested_keys, g->keys, sizeof(requested_keys));
+#endif
             MemoryBarrier();
             if (seq == g->seq) {
                 if (session != cached_session) {
@@ -84,7 +105,16 @@ static void snapshot(void) {
                     command_seq = -1;
                 }
                 RECT client;
+#ifdef MONO_BACKEND
+                client.right = g->client_width;
+                client.bottom = g->client_height;
+                memcpy(desired_keys, requested_keys, sizeof(desired_keys));
+                if (client.right > 0 && client.bottom > 0) {
+                    g->render_width = screen_width();
+                    g->render_height = screen_height();
+#else
                 if (GetClientRect((HWND)(uintptr_t)g->hwnd, &client) && client.right > 0 && client.bottom > 0) {
+#endif
                     position.x = (float)x * screen_width() / client.right;
                     position.y = (float)screen_height() - (float)y * screen_height() / client.bottom;
                     position.z = 0;
@@ -103,8 +133,21 @@ static void snapshot(void) {
     }
     down = held & ~previous;
     up = previous & ~held;
+#ifdef MONO_BACKEND
+    bool key_release = false;
+    for (int i = 0; i < 16; ++i) {
+        uint32_t next = valid ? desired_keys[i] : 0;
+        down_keys[i] = next & ~held_keys[i];
+        up_keys[i] = held_keys[i] & ~next;
+        held_keys[i] = next;
+        key_release |= up_keys[i] != 0;
+    }
+#endif
     /* One virtual release frame on a lost heartbeat prevents stuck UI drags. */
     active = valid || up != 0;
+#ifdef MONO_BACKEND
+    active |= key_release;
+#endif
     InterlockedExchange(&g->native_session, (LONG)cached_session);
     ReleaseSRWLockExclusive(&state_lock);
 }
@@ -203,6 +246,9 @@ static bool executable_in_module(void *pointer, HMODULE module) {
            protection == PAGE_EXECUTE_READWRITE || protection == PAGE_EXECUTE_WRITECOPY);
 }
 
+#ifdef MONO_BACKEND
+#include "mono_runtime.h"
+#else
 static DWORD WINAPI initialize(void *unused) {
     (void)unused;
     wchar_t mapping[96];
@@ -326,6 +372,7 @@ static DWORD WINAPI initialize(void *unused) {
     InterlockedExchange(&g->status, 2);
     return 0;
 }
+#endif
 
 BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved) {
     (void)reserved;
