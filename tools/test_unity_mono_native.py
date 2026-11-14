@@ -1,5 +1,6 @@
 """Exercise Mono adapter/IPC through a disposable native runtime, no real game."""
 from pathlib import Path
+import argparse
 import ctypes
 import json
 import mmap
@@ -17,6 +18,10 @@ import win32gui
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--allow-desktop-activity", action="store_true",
+        help="Run protocol checks while the desktop is in use; cursor/focus invariance remains unverified")
+    args = parser.parse_args()
     folder = ROOT / "build/unity_mono_fixture"
     folder.mkdir(parents=True, exist_ok=True)
     zig = ROOT / "build/tools/zig/ziglang/zig.exe"
@@ -72,7 +77,11 @@ def main():
         bridge = UnityBridge(hwnd, allow_experimental=True, profile_store_path=profiles)
         bridge.key_action("key_press", "esc")
         assert values()[7] == values()[8], values()
-        assert cursor == win32gui.GetCursorPos() and foreground == win32gui.GetForegroundWindow()
+        desktop_unchanged = cursor == win32gui.GetCursorPos() and foreground == win32gui.GetForegroundWindow()
+        if args.allow_desktop_activity:
+            print("Cursor/focus invariance: not certified (desktop activity allowed)", flush=True)
+        else:
+            assert desktop_unchanged, "Desktop changed during test; retry idle or use --allow-desktop-activity for protocol checks only"
         print("Mono: scaled coordinates, click/up, key down/up, true hold, repeat, hotkey, heartbeat release, reconnect: OK", values(), flush=True)
     finally:
         if bridge: bridge.close()

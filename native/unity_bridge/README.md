@@ -61,6 +61,15 @@ never stacked on top of each other.
   EventSystem.Update through mono_compile_method. Its JIT address is validated as
   executable memory; native input getters must belong to UnityPlayer.dll. The
   existing IL2CPP path retains its own module-bound address checks and protocol.
+- Mono searches up to the signed x64 jump limit for a near trampoline. If JIT
+  reservations leave no allocation slot, EventSystem.Update alone may use a
+  14-byte absolute entry patch. This fallback accepts only decoded, position-
+  independent, straight-line prologue instructions; RIP-relative accesses,
+  branches, calls, returns and too-short prologues are rejected. It uses MinHook's
+  existing thread suspension/IP translation and cleanup, with a separate buffer.
+- Probe failures include the function name and real MinHook status; status 9 is
+  allocation failure, not an unsupported game input method. `absolute_update_hook`
+  in Mono diagnostics reports which successful update-hook strategy was used.
 - Mono coordinates use client dimensions supplied by the DPI-aware controller and
   Screen.width/height read inside Unity. This avoids mixing logical window units
   from the game's DPI context with the controller's capture coordinates.
@@ -86,6 +95,7 @@ never stacked on top of each other.
 .\.venv\Scripts\python.exe -B -m unittest discover -s tests -v
 .\.venv\Scripts\python.exe -B tools/test_unity_bridge_native.py
 .\.venv\Scripts\python.exe -B tools/test_unity_mono_native.py
+.\.venv\Scripts\python.exe -B tools/test_unity_far_hook.py
 ```
 
 The second command compiles and launches a hidden, disposable, renamed fixture
@@ -124,3 +134,8 @@ button using the current window layout; coordinates are not universal.
 [TsudaKageyu/minhook v1.3.4](https://github.com/TsudaKageyu/minhook/tree/v1.3.4),
 downloaded from the official release tag. Keep the included `LICENSE.txt`,
 which includes the licenses for MinHook's components, when redistributing.
+
+Local changes to v1.3.4: configurable near allocation range, checked RIP-relative
+relocation bounds, and an opt-in absolute JIT detour (`MH_CreateHookFar`,
+`itm_far_trampoline.h`, hook entry/enable/restore/free handling). IL2CPP keeps the
+standard relative entry patch. The original copyright/license headers are retained.

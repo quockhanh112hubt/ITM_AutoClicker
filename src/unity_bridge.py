@@ -208,7 +208,19 @@ class UnityBridge:
                         -4: "Legacy Input or uGUI runtime layout does not match", -5: "Hook library unavailable",
                         -6: "An input function cannot be hooked", -7: "Hook activation failed", -8: "Runtime pointer or field validation failed",
                         -9: "The active UI uses New Input System, not Legacy Input"}
-                    raise UnityBridgeError(f"Unity profile probe failed: {reasons.get(self.shared.status, 'unknown error')} "
+                    detail = ""
+                    if self.shared.status == -6:
+                        names = ["Input.mousePosition", "Input.GetMouseButtonDown", "Input.GetMouseButtonUp",
+                            "Input.GetMouseButton", "Input.mouseScrollDelta"]
+                        if self._is_mono:
+                            names += ["Input.GetKeyDownInt", "Input.GetKeyUpInt", "Input.GetKeyInt"]
+                        names += ["EventSystem.Update"]
+                        index = self.shared.reserved
+                        target = names[index] if 0 <= index < len(names) else f"hook {index}"
+                        errors = {7: "target is not executable", 8: "unsupported function instructions",
+                            9: "cannot allocate trampoline within jump range", 10: "cannot change memory protection"}
+                        detail = f" [{target}: {errors.get(self.shared.error_code, 'MinHook error')}]"
+                    raise UnityBridgeError(f"Unity profile probe failed: {reasons.get(self.shared.status, 'unknown error')}{detail} "
                         f"(stage {self.shared.status}, code {self.shared.error_code}). No virtual input was enabled; restart game to retry.")
                 if time.monotonic() > deadline:
                     raise UnityBridgeError("Unity helper initialization timed out; restart game before retrying")
@@ -370,6 +382,8 @@ class UnityBridge:
             if self.shared is None:
                 return {"connected": False}
             extra = {name: getattr(self.shared, name) for name in ("key_reads", "client_width", "client_height", "render_width", "render_height")} if isinstance(self.shared, MonoShared) else {}
+            if isinstance(self.shared, MonoShared):
+                extra["absolute_update_hook"] = bool(self.shared.padding)
             return {"connected": True, "profile_id": self.profile_id, **extra, **{name: getattr(self.shared, name) for name in
                     ("status", "frame", "ack", "position_reads", "button_reads", "updates", "focus_overrides")}}
 

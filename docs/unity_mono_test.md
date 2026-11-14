@@ -35,6 +35,12 @@ trước khi thay DLL, rồi chạy:
 .\.venv\Scripts\python.exe tools/build_unity_bridge.py --backend mono
 ```
 
+Nếu gặp `stage -6, code 0` từ bản DLL cũ, thoát hẳn game rồi mở lại trước khi thử
+bản sửa. Một phiên Vạn Thắng Nam Đế đã tái hiện lỗi cấp phát trampoline cho
+`EventSystem.Update`: vùng JIT không còn chỗ phù hợp trong tầm nhảy tương đối.
+Bản sửa bổ sung nhảy tuyệt đối có kiểm tra prologue khi hết vùng cấp phát gần;
+log mới ghi tên hàm và mã MinHook thật. Chỉ Stop/Start ITM không thay DLL đã nạp.
+
 ## Phạm vi
 
 - Chuột: click trái/phải/giữa, giữ, kéo và cuộn qua Legacy Input.

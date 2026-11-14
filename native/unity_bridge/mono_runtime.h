@@ -53,7 +53,11 @@ static bool executable_jit(void *pointer) {
 static DWORD WINAPI initialize(void *unused) {
     (void)unused;
     wchar_t mapping[96];
+#ifdef MONO_DIAGNOSTIC
+    wsprintfW(mapping, L"Local\\ITMUnityMonoDiag_%lu", GetCurrentProcessId());
+#else
     wsprintfW(mapping, L"Local\\ITMUnityMono_v1_%lu", GetCurrentProcessId());
+#endif
     HANDLE handle = OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, mapping);
     if (!handle) return 1;
     g = (Shared *)MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(Shared));
@@ -123,10 +127,37 @@ static DWORD WINAPI initialize(void *unused) {
     void **originals[] = {(void **)&original_position, (void **)&original_down, (void **)&original_up,
         (void **)&original_held, (void **)&original_scroll, (void **)&original_key_down, (void **)&original_key_up, (void **)&original_key_held};
     bool ok = true;
-    for (int i = 0; i < 8 && ok; ++i) ok = install(targets[i], hooks[i], originals[i]);
-    if (!ok || !install(update, virtual_update, (void **)&original_update)) {
+    for (int i = 0; i < 8 && ok; ++i) {
+        g->reserved = i;
+#ifdef MONO_DIAGNOSTIC
+        memcpy(g->keys, &targets[i], sizeof(void *));
+#endif
+        ok = install(targets[i], hooks[i], originals[i]);
+    }
+    if (ok) {
+        g->reserved = 8;
+#ifdef MONO_DIAGNOSTIC
+        memcpy(g->keys, &update, sizeof(void *));
+#endif
+    }
+    if (ok) {
+        result = MH_CreateHook(update, virtual_update, (void **)&original_update);
+        if (result == MH_ERROR_MEMORY_ALLOC) {
+            result = MH_CreateHookFar(update, virtual_update, (void **)&original_update);
+            if (result == MH_OK) g->padding = 1;
+        }
+        if (result != MH_OK) g->error_code = result;
+        ok = result == MH_OK;
+    }
+    if (!ok) {
         MH_Uninitialize(); g->status = -6; return 10;
     }
+#ifdef MONO_DIAGNOSTIC
+    /* Prepare trampolines only: never patch instructions or send game input. */
+    MH_Uninitialize();
+    InterlockedExchange(&g->status, 2);
+    return 0;
+#endif
     result = MH_EnableHook(MH_ALL_HOOKS);
     if (result != MH_OK) { MH_DisableHook(MH_ALL_HOOKS); MH_Uninitialize(); g->error_code = result; g->status = -7; return 11; }
     InterlockedExchange(&g->status, 2);

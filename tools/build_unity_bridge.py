@@ -39,7 +39,9 @@ def main():
         build = list(command)
         build[build.index("-o") + 1] = str(staging / filename)
         if backend == "mono":
-            build.append("-DMONO_BACKEND")
+            # Leave 64 KiB headroom within signed rel32 reach for both the
+            # detour relay and relocated RIP-relative instructions.
+            build.extend(["-DMONO_BACKEND", "-DITM_MINHOOK_MEMORY_RANGE=0x7FFF0000"])
         subprocess.run(build, cwd=ROOT, check=True)
         try:
             shutil.copyfile(staging / filename, output / filename)

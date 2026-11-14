@@ -33,6 +33,9 @@
 #include "../include/MinHook.h"
 #include "buffer.h"
 #include "trampoline.h"
+#ifdef MONO_BACKEND
+#include "itm_far_trampoline.h"
+#endif
 
 #ifndef ARRAYSIZE
     #define ARRAYSIZE(A) (sizeof(A)/sizeof((A)[0]))
@@ -63,7 +66,8 @@ typedef struct _HOOK_ENTRY
     LPVOID pTarget;             // Address of the target function.
     LPVOID pDetour;             // Address of the detour or relay function.
     LPVOID pTrampoline;         // Address of the trampoline function.
-    UINT8  backup[8];           // Original prologue of the target function.
+    UINT8  backup[16];          // Includes an optional 14-byte absolute JIT patch.
+    UINT8  farPatch;            // ITM: independently allocated absolute trampoline.
 
     UINT8  patchAbove  : 1;     // Uses the hot patch area.
     UINT8  isEnabled   : 1;     // Enabled.
@@ -175,7 +179,7 @@ static DWORD_PTR FindOldIP(PHOOK_ENTRY pHook, DWORD_PTR ip)
 
 #if defined(_M_X64) || defined(__x86_64__)
     // Check relay function.
-    if (ip == (DWORD_PTR)pHook->pDetour)
+    if (!pHook->farPatch && ip == (DWORD_PTR)pHook->pDetour)
         return (DWORD_PTR)pHook->pTarget;
 #endif
 
@@ -396,6 +400,7 @@ static MH_STATUS EnableHookLL(UINT pos, BOOL enable)
     DWORD  oldProtect;
     SIZE_T patchSize    = sizeof(JMP_REL);
     LPBYTE pPatchTarget = (LPBYTE)pHook->pTarget;
+    if (pHook->farPatch) patchSize = sizeof(JMP_ABS);
 
     if (pHook->patchAbove)
     {
@@ -408,6 +413,10 @@ static MH_STATUS EnableHookLL(UINT pos, BOOL enable)
 
     if (enable)
     {
+        if (pHook->farPatch) {
+            JMP_ABS jump = {0xFF, 0x25, 0, (UINT64)pHook->pDetour};
+            memcpy(pPatchTarget, &jump, sizeof(jump));
+        } else {
         PJMP_REL pJmp = (PJMP_REL)pPatchTarget;
         pJmp->opcode = 0xE9;
         pJmp->operand = (UINT32)((LPBYTE)pHook->pDetour - (pPatchTarget + sizeof(JMP_REL)));
@@ -418,13 +427,14 @@ static MH_STATUS EnableHookLL(UINT pos, BOOL enable)
             pShortJmp->opcode = 0xEB;
             pShortJmp->operand = (UINT8)(0 - (sizeof(JMP_REL_SHORT) + sizeof(JMP_REL)));
         }
+        }
     }
     else
     {
         if (pHook->patchAbove)
             memcpy(pPatchTarget, pHook->backup, sizeof(JMP_REL) + sizeof(JMP_REL_SHORT));
         else
-            memcpy(pPatchTarget, pHook->backup, sizeof(JMP_REL));
+            memcpy(pPatchTarget, pHook->backup, patchSize);
     }
 
     VirtualProtect(pPatchTarget, patchSize, oldProtect, &oldProtect);
@@ -553,6 +563,9 @@ MH_STATUS WINAPI MH_Uninitialize(VOID)
             // HeapFree is actually not required, but some tools detect a false
             // memory leak without HeapFree.
 
+            for (UINT i = 0; i < g_hooks.size; ++i)
+                if (g_hooks.pItems[i].farPatch)
+                    VirtualFree(g_hooks.pItems[i].pTrampoline, 0, MEM_RELEASE);
             UninitializeBuffer();
 
             HeapFree(g_hHeap, 0, g_hooks.pItems);
@@ -576,7 +589,7 @@ MH_STATUS WINAPI MH_Uninitialize(VOID)
 }
 
 //-------------------------------------------------------------------------
-MH_STATUS WINAPI MH_CreateHook(LPVOID pTarget, LPVOID pDetour, LPVOID *ppOriginal)
+static MH_STATUS CreateHookInternal(LPVOID pTarget, LPVOID pDetour, LPVOID *ppOriginal, BOOL allowFar)
 {
     MH_STATUS status = MH_OK;
 
@@ -589,7 +602,16 @@ MH_STATUS WINAPI MH_CreateHook(LPVOID pTarget, LPVOID pDetour, LPVOID *ppOrigina
             UINT pos = FindHookEntry(pTarget);
             if (pos == INVALID_HOOK_POS)
             {
-                LPVOID pBuffer = AllocateBuffer(pTarget);
+                LPVOID pBuffer = allowFar ? NULL : AllocateBuffer(pTarget);
+                BOOL farPatch = FALSE;
+#ifdef MONO_BACKEND
+                if (allowFar && pBuffer == NULL) {
+                    pBuffer = VirtualAlloc(NULL, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+                    farPatch = pBuffer != NULL;
+                }
+#else
+                (void)allowFar;
+#endif
                 if (pBuffer != NULL)
                 {
                     TRAMPOLINE ct;
@@ -597,12 +619,19 @@ MH_STATUS WINAPI MH_CreateHook(LPVOID pTarget, LPVOID pDetour, LPVOID *ppOrigina
                     ct.pTarget     = pTarget;
                     ct.pDetour     = pDetour;
                     ct.pTrampoline = pBuffer;
-                    if (CreateTrampolineFunction(&ct))
+                    BOOL created;
+#ifdef MONO_BACKEND
+                    created = farPatch ? CreateFarTrampoline(&ct) : CreateTrampolineFunction(&ct);
+#else
+                    created = CreateTrampolineFunction(&ct);
+#endif
+                    if (created)
                     {
                         PHOOK_ENTRY pHook = AddHookEntry();
                         if (pHook != NULL)
                         {
                             pHook->pTarget     = ct.pTarget;
+                            pHook->farPatch    = farPatch;
 #if defined(_M_X64) || defined(__x86_64__)
                             pHook->pDetour     = ct.pRelay;
 #else
@@ -627,7 +656,7 @@ MH_STATUS WINAPI MH_CreateHook(LPVOID pTarget, LPVOID pDetour, LPVOID *ppOrigina
                             }
                             else
                             {
-                                memcpy(pHook->backup, pTarget, sizeof(JMP_REL));
+                                memcpy(pHook->backup, pTarget, farPatch ? sizeof(JMP_ABS) : sizeof(JMP_REL));
                             }
 
                             if (ppOriginal != NULL)
@@ -645,7 +674,8 @@ MH_STATUS WINAPI MH_CreateHook(LPVOID pTarget, LPVOID pDetour, LPVOID *ppOrigina
 
                     if (status != MH_OK)
                     {
-                        FreeBuffer(pBuffer);
+                        if (farPatch) VirtualFree(pBuffer, 0, MEM_RELEASE);
+                        else FreeBuffer(pBuffer);
                     }
                 }
                 else
@@ -674,6 +704,17 @@ MH_STATUS WINAPI MH_CreateHook(LPVOID pTarget, LPVOID pDetour, LPVOID *ppOrigina
 }
 
 //-------------------------------------------------------------------------
+MH_STATUS WINAPI MH_CreateHook(LPVOID pTarget, LPVOID pDetour, LPVOID *ppOriginal)
+{
+    return CreateHookInternal(pTarget, pDetour, ppOriginal, FALSE);
+}
+#ifdef MONO_BACKEND
+MH_STATUS WINAPI MH_CreateHookFar(LPVOID pTarget, LPVOID pDetour, LPVOID *ppOriginal)
+{
+    return CreateHookInternal(pTarget, pDetour, ppOriginal, TRUE);
+}
+#endif
+
 MH_STATUS WINAPI MH_RemoveHook(LPVOID pTarget)
 {
     MH_STATUS status = MH_OK;
@@ -699,7 +740,9 @@ MH_STATUS WINAPI MH_RemoveHook(LPVOID pTarget)
 
             if (status == MH_OK)
             {
-                FreeBuffer(g_hooks.pItems[pos].pTrampoline);
+                if (g_hooks.pItems[pos].farPatch)
+                    VirtualFree(g_hooks.pItems[pos].pTrampoline, 0, MEM_RELEASE);
+                else FreeBuffer(g_hooks.pItems[pos].pTrampoline);
                 DeleteHookEntry(pos);
             }
         }

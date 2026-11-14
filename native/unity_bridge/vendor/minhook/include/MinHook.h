@@ -109,6 +109,10 @@ extern "C" {
     //                     used to call the original target function.
     //                     This parameter can be NULL.
     MH_STATUS WINAPI MH_CreateHook(LPVOID pTarget, LPVOID pDetour, LPVOID *ppOriginal);
+#ifdef MONO_BACKEND
+    // ITM: opt-in absolute x64 entry patch for a relocatable Mono JIT prologue.
+    MH_STATUS WINAPI MH_CreateHookFar(LPVOID pTarget, LPVOID pDetour, LPVOID *ppOriginal);
+#endif
 
     // Creates a hook for the specified API function, in disabled state.
     // Parameters:

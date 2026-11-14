@@ -234,7 +234,9 @@ static void virtual_update(void *instance, const void *method) {
 }
 
 static bool install(void *target, void *replacement, void **original) {
-    return target && MH_CreateHook(target, replacement, original) == MH_OK;
+    MH_STATUS result = target ? MH_CreateHook(target, replacement, original) : MH_ERROR_NOT_EXECUTABLE;
+    if (result != MH_OK) InterlockedExchange(&g->error_code, result);
+    return result == MH_OK;
 }
 
 static bool executable_in_module(void *pointer, HMODULE module) {
@@ -356,12 +358,16 @@ static DWORD WINAPI initialize(void *unused) {
     }
     MH_STATUS result = MH_Initialize();
     if (result != MH_OK) { g->error_code = result; g->status = -5; return 8; }
-    if (!install(pos, virtual_position, (void **)&original_position) ||
-        !install(d, virtual_down, (void **)&original_down) ||
-        !install(u, virtual_up, (void **)&original_up) ||
-        !install(h, virtual_held, (void **)&original_held) ||
-        !install(s, virtual_scroll, (void **)&original_scroll) ||
-        !install(update, virtual_update, (void **)&original_update)) {
+    void *targets[] = {pos, d, u, h, s, update};
+    void *hooks[] = {virtual_position, virtual_down, virtual_up, virtual_held, virtual_scroll, virtual_update};
+    void **originals[] = {(void **)&original_position, (void **)&original_down, (void **)&original_up,
+        (void **)&original_held, (void **)&original_scroll, (void **)&original_update};
+    bool ok = true;
+    for (int i = 0; i < 6 && ok; ++i) {
+        g->reserved = i;
+        ok = install(targets[i], hooks[i], originals[i]);
+    }
+    if (!ok) {
         MH_Uninitialize(); g->status = -6; return 9;
     }
     result = MH_EnableHook(MH_ALL_HOOKS);
